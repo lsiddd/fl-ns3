@@ -575,6 +575,12 @@ round_cleanup()
             ueNodes.Get(i)->GetApplication(j)->SetStopTime(Simulator::Now());
         }
     }
+    for (uint32_t i = 0; i < remoteHostContainer.GetN(); i++) {
+        auto n_apps = remoteHostContainer.Get(i)->GetNApplications();
+        for (uint32_t j = 0; j < n_apps; j++) {
+            remoteHostContainer.Get(i)->GetApplication(j)->SetStopTime(Simulator::Now());
+        }
+    }
 }
 
 
