@@ -6,7 +6,7 @@ import argparse
 import numpy as np
 
 os.environ["TF_USE_LEGACY_KERAS"] = "1"
-# os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
+os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
 
 
 def split_data(train_images, train_labels, n_clients, client_id):
