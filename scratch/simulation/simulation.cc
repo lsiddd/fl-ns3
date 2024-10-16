@@ -409,7 +409,7 @@ std::vector<Clients_Models> train_clients()
         // Using async to launch the tasks in parallel
         futures.push_back(std::async(std::launch::async, [i]() {
             std::stringstream cmd;
-            cmd << "scratch/client.py --model models/" << ueNodes.Get(i) << "_model.h5 --epochs 5 --n_clients "
+            cmd << "scratch/client.py --model models/" << ueNodes.Get(i) << "_model.keras --epochs 5 --n_clients "
                 << ueNodes.GetN() << " --id " << i;
             LOG(cmd.str());
             int training_time = runScriptAndMeasureTime(cmd.str()) / ueNodes.GetN();
@@ -426,7 +426,7 @@ std::vector<Clients_Models> train_clients()
         else {
             for (uint32_t i = 0; i < ueNodes.GetN(); i++) {
                 std::stringstream cmd;
-                cmd << "scratch/client.py --model models/" << ueNodes.Get(i) << "_model.h5 --epochs 1 --n_clients "
+                cmd << "scratch/client.py --model models/" << ueNodes.Get(i) << "_model.keras --epochs 1 --n_clients "
                     << ueNodes.GetN() << " --id " << i;
                 LOG(cmd.str());
                 int training_time = runScriptAndMeasureTime(cmd.str());

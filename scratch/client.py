@@ -186,14 +186,13 @@ def save_compressed_top_n_layers(model, top_n_layers, output_filename):
 
     return model_size
 
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--model', type=str, default="fashionmnist_quantized_model.keras")
     parser.add_argument('--epochs', type=int, default=10)
     parser.add_argument('--n_clients', type=int, required=True)
     parser.add_argument('--id', type=int, required=True)
-    parser.add_argument('--top_n', type=int, default=3, help='Number of top layers to save after SHAP ranking')
+    parser.add_argument('--top_n', type=int, default=3, help='Number of top layers to save after ranking')
     args = parser.parse_args()
 
     (train_images, train_labels), (test_images, test_labels) = load_and_preprocess_data()
@@ -214,10 +213,11 @@ if __name__ == "__main__":
 
     compressed_size = compress_and_quantize_model(model, quantized_model)
 
-    data_sample = test_images[:100]
-    shap_values = compute_shap_values(model, data_sample, args.model)
+    # Rank model layers based on accuracy drop instead of SHAP values
+    layer_importances = rank_model_layers(model, test_images, test_labels)
 
-    top_n_layers = shap_values[:args.top_n]
+    # Select top N layers based on accuracy drop
+    top_n_layers = [model.layers[layer_index] for layer_index, _, _ in layer_importances[:args.top_n]]
     top_n_output_filename = f"{args.model.split('.')[0]}_top_{args.top_n}_layers.tflite"
     compressed_top_n_size = save_compressed_top_n_layers(model, top_n_layers, top_n_output_filename)
 

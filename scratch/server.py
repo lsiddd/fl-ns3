@@ -23,7 +23,7 @@ def load_models_from_directory(directory):
     models = []
     model_filenames = []
     for filename in os.listdir(directory):
-        if filename.endswith(".h5"):
+        if filename.endswith(".keras"):
             model_path = os.path.join(directory, filename)
             model = tf.keras.models.load_model(model_path)
             models.append(model)
@@ -89,7 +89,7 @@ def save_and_replace_fedavg_model(directory, output_path, validation_data, quant
     models, model_filenames = load_models_from_directory(directory)
     
     if len(models) == 0:
-        raise ValueError("No models found in the directory with .h5 extension.")
+        raise ValueError("No models found in the directory with .keras extension.")
     
     # Perform FedAvg to average the weights
     avg_weights = fedavg(models)
@@ -133,7 +133,7 @@ def save_and_replace_fedavg_model(directory, output_path, validation_data, quant
 if __name__ == "__main__":
     # Paths
     directory_path = "models/"  # Replace with your directory containing .h5 models
-    output_model_path = "models/fedavg_model.h5"  # Replace with desired output path
+    output_model_path = "models/fedavg_model.keras"  # Replace with desired output path
     
     # Load FashionMNIST data and get validation split
     (_, _), (x_val, y_val), (_, _) = load_fashionmnist_data(validation_split=0.2)
