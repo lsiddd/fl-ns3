@@ -3,6 +3,17 @@
 *.patch
 *.rej
 
+*keras
+*.json
+*.tflite
+campus*
+*Ul
+*Dl
+*Trace*
+*xml
+models
+*h5
+
 *.o
 *.pyc
 *.pyo
