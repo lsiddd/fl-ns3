@@ -1,0 +1,54 @@
+#!/bin/sh
+#
+
+RPMBUILD_DIR=~/rpmbuild
+BONNMOTION_DIR=.
+
+usage () {
+
+    cat <<EOF
+
+  Usage: $(basename $0) [ options ]
+
+  Create an RPM for VAN Testbed CentOS from a working directory of the
+  bonnmotion terrain branch.
+
+  -d  The directory of the bonnmotion code (default: ${BONNMOTION_DIR})
+
+  -D  The rpmbuild directory (default: ${RPMBUILD_DIR})
+
+  -h  Print this help message and exit
+
+EOF
+
+}
+
+while getopts "hdD" optname; do
+    case "${optname}" in
+	h) usage; exit;;
+	D) RPMBUILD_DIR="${OPTARG}";;
+	d) BONNMOTION_DIR="${OPTARG}";;
+	*) usage 1>&2; exit 1;;
+    esac
+done
+
+shift $((${OPTIND} - 1))
+
+if ! [ -d "${RPMBUILD_DIR}/SPECS" ] || ! [ -d "${RPMBUILD_DIR}/SOURCES" ]
+then
+    printf 1>&2 "${RPMBUILD_DIR} is not set up for building RPMs\n"
+    exit 1
+else
+
+    curdate=$(date +"%Y%m%d")
+
+    /usr/bin/sed -e s/@VERSION@/${curdate}/ \
+	< "${BONNMOTION_DIR}"/bonnmotion-terrain.spec.in \
+	> "${RPMBUILD_DIR}"/SPECS/bonnmotion-terrain.spec
+
+    /usr/bin/tar caf "${RPMBUILD_DIR}"/SOURCES/bonnmotion-${curdate}.tar.bz2 \
+	-C "${BONNMOTION_DIR}"/.. bonnmotion
+
+    /usr/bin/rpmbuild -ba "${RPMBUILD_DIR}"/SPECS/bonnmotion-terrain.spec
+
+fi
