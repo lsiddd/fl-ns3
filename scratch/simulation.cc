@@ -37,9 +37,9 @@ static const uint32_t writeSize = 2500;
 uint8_t data[writeSize] = {'g'};
 uint8_t data_fin[writeSize] = {'b'};
 double simStopTime = 3600;
-int number_of_ues = 10;
-int number_of_enbs = 1;
-int n_participaping_clients = 5;
+int number_of_ues = 20;
+int number_of_enbs = 20;
+int n_participaping_clients = number_of_ues / 2;
 int scenario_size = 1000;
 
 std::random_device dev;
@@ -55,174 +55,188 @@ std::map<Ptr<Node>, int> node_to_bytes, training_time;
 // MyApp class definition
 class MyApp : public Application
 {
-  public:
+public:
     MyApp();
-    virtual ~MyApp();
-    void Setup(Ptr<Socket> socket,
-               Address address,
-               uint32_t packetSize,
-               uint32_t nPackets,
-               DataRate dataRate);
+    virtual ~MyApp() override;
+    
+    void Setup(Ptr<Socket> socket, Address address, uint32_t packetSize, 
+               uint32_t nPackets, DataRate dataRate);
+    virtual void StopApplication() override;
 
-  private:
-    virtual void StartApplication(void);
-    virtual void StopApplication(void);
-    void ScheduleTx(void);
-    void SendPacket(void);
+private:
+    virtual void StartApplication() override;
+    void ScheduleTx();
+    void SendPacket();
 
-    Ptr<Socket> m_socket;
+    Ptr<Socket> m_socket{nullptr};  // Use nullptr for pointer initialization
     Address m_peer;
-    uint32_t m_packetSize;
-    uint32_t m_nPackets;
+    uint32_t m_packetSize{0};
+    uint32_t m_nPackets{0};
     DataRate m_dataRate;
     EventId m_sendEvent;
-    bool m_running;
-    uint32_t m_packetsSent;
-    Time m_start_time;
+    bool m_running{false};
+    uint32_t m_packetsSent{0};
+    Time m_startTime;  // Renamed for consistency
 };
 
 // MyApp class implementation
-MyApp::MyApp()
-    : m_socket(0),
-      m_peer(),
-      m_packetSize(0),
-      m_nPackets(0),
-      m_dataRate(0),
-      m_sendEvent(),
-      m_running(false),
-      m_packetsSent(0)
-{
-}
+MyApp::MyApp() = default;  // Use default constructor
 
 MyApp::~MyApp()
 {
-    m_socket = 0;
+    m_socket = nullptr;  // Set to nullptr for clarity
 }
 
-void
-MyApp::Setup(Ptr<Socket> socket,
-             Address address,
-             uint32_t packetSize,
-             uint32_t nPackets,
-             DataRate dataRate)
+void MyApp::Setup(Ptr<Socket> socket, Address address, uint32_t packetSize,
+                  uint32_t nPackets, DataRate dataRate)
 {
     m_socket = socket;
     m_peer = address;
     m_packetSize = packetSize;
     m_nPackets = nPackets;
     m_dataRate = dataRate;
-    m_start_time = Simulator::Now();
+    m_startTime = Simulator::Now();
 }
 
-void
-MyApp::StartApplication(void)
+void MyApp::StartApplication()
 {
     m_running = true;
     m_packetsSent = 0;
+    
+    // Check if socket is valid before using it
+    if (!m_socket)
+    {
+        NS_FATAL_ERROR("Socket not initialized");
+    }
+
     m_socket->Bind();
     m_socket->Connect(m_peer);
     SendPacket();
 }
 
-void
-MyApp::StopApplication(void)
+void MyApp::StopApplication()
 {
     m_running = false;
+
     if (m_sendEvent.IsPending())
     {
         Simulator::Cancel(m_sendEvent);
     }
+
     if (m_socket)
     {
         m_socket->Close();
     }
 }
 
-void
-MyApp::SendPacket(void)
+void MyApp::SendPacket()
 {
     Ptr<Packet> packet = Create<Packet>(m_packetSize);
+    
+    // Logic to handle last packet separately
     if (m_packetsSent + 1 == m_nPackets)
     {
-        m_socket->Send(data_fin, writeSize, 0);
+        m_socket->Send(data_fin, writeSize, 0);  // Placeholder: data_fin should be defined elsewhere
     }
     else
     {
-        m_socket->Send(data, writeSize, 0);
+        m_socket->Send(data, writeSize, 0);  // Placeholder: data should be defined elsewhere
     }
 
-    if (++m_packetsSent < m_nPackets)
+    ++m_packetsSent;
+
+    if (m_packetsSent < m_nPackets)
     {
         ScheduleTx();
     }
     else
     {
-        Time stop_time = Simulator::Now();
+        Time stopTime = Simulator::Now();  // Consider logging or using stopTime
     }
 }
 
-void
-MyApp::ScheduleTx(void)
+void MyApp::ScheduleTx()
 {
     if (m_running)
     {
-        Time tNext(Seconds(m_packetSize * 8 / static_cast<double>(m_dataRate.GetBitRate())));
+        double seconds = static_cast<double>(m_packetSize * 8) / m_dataRate.GetBitRate();
+        Time tNext = Seconds(seconds);
         m_sendEvent = Simulator::Schedule(tNext, &MyApp::SendPacket, this);
     }
 }
 
 // Callback and helper functions
-void
-RxCallback(std::string path, ns3::Ptr<const ns3::Packet> packet, const ns3::Address& from)
+void RxCallback(const std::string path, Ptr<const Packet> packet, const Address& from)
 {
     uint32_t packetSize = packet->GetSize();
-    std::vector<uint8_t> b(packetSize);
-    packet->CopyData(b.data(), packetSize);
-    std::string dataAsString(reinterpret_cast<char*>(b.data()), packetSize);
+    std::vector<uint8_t> buffer(packetSize);
+    packet->CopyData(buffer.data(), packetSize);
+    
+    std::string dataAsString(reinterpret_cast<char*>(buffer.data()), packetSize);
 
-    ns3::InetSocketAddress address = ns3::InetSocketAddress::ConvertFrom(from);
-    ns3::Ipv4Address senderIp = address.GetIpv4();
+    InetSocketAddress address = InetSocketAddress::ConvertFrom(from);
+    Ipv4Address senderIp = address.GetIpv4();
 
     if (dataAsString.find('b') != std::string::npos)
     {
-        double receiveTime = ns3::Simulator::Now().GetSeconds();
-        std::cout << "Stream ending signal ('b') received from " << senderIp << " at time "
-                  << receiveTime << " seconds." << std::endl;
-        endOfStreamTimes[senderIp] = receiveTime;
+        double receiveTime = Simulator::Now().GetSeconds();
+        std::cout << "Stream ending signal ('b') received from " << senderIp 
+                  << " at time " << receiveTime << " seconds." << std::endl;
+        
+        endOfStreamTimes[senderIp] = receiveTime;  // Assuming endOfStreamTimes is declared somewhere
     }
 }
 
-void
-sendstream(Ptr<Node> sending_node, Ptr<Node> receiving_node, int size)
+void sendStream(Ptr<Node> sendingNode, Ptr<Node> receivingNode, int size)
 {
+    static uint16_t port = 5000;  // Initialized once and incremented for each call
     port++;
-    int n_bytes = 1040;
-    int n_packets = size / 1040;
 
-    Ipv4Address receiving_address;
-    Ptr<Ipv4> ipv4 = receiving_node->GetObject<Ipv4>();
-    Ipv4InterfaceAddress iaddr = ipv4->GetAddress(1, 0);
+    constexpr int packetSize = 1040;  // Defined as a constant for better readability
+    int nPackets = size / packetSize; // Calculate the number of packets
+
+    // Get receiving node's IPv4 address
+    Ptr<Ipv4> ipv4 = receivingNode->GetObject<Ipv4>();
+    if (!ipv4)
+    {
+        NS_FATAL_ERROR("No Ipv4 object found on receiving node");
+    }
+
+    Ipv4InterfaceAddress iaddr = ipv4->GetAddress(1, 0);  // Assume the second interface
     Ipv4Address ipAddr = iaddr.GetLocal();
 
+    // Logging the stream initiation
     LOG(Simulator::Now().GetSeconds()
-        << "s: Starting stream from node " << sending_node->GetId() << " to node "
-        << receiving_node->GetId() << " " << size << " bytes.");
+        << "s: Starting stream from node " << sendingNode->GetId() 
+        << " to node " << receivingNode->GetId() << ", " 
+        << size << " bytes.");
 
+    // Create and configure the sink (receiver)
     Address sinkAddress(InetSocketAddress(ipAddr, port));
-    PacketSinkHelper packetSinkHelper("ns3::TcpSocketFactory",
+    PacketSinkHelper packetSinkHelper("ns3::TcpSocketFactory", 
                                       InetSocketAddress(Ipv4Address::GetAny(), port));
-    ApplicationContainer sinkApps = packetSinkHelper.Install(receiving_node);
-    sinkApps.Start(Simulator::Now() + Seconds(0.1));
+    ApplicationContainer sinkApps = packetSinkHelper.Install(receivingNode);
+    sinkApps.Start(Seconds(0.1));
 
-    Ptr<Socket> ns3TcpSocket = Socket::CreateSocket(sending_node, TcpSocketFactory::GetTypeId());
+    // Create the sending socket
+    Ptr<Socket> ns3TcpSocket = Socket::CreateSocket(sendingNode, TcpSocketFactory::GetTypeId());
+    if (!ns3TcpSocket)
+    {
+        NS_FATAL_ERROR("Failed to create TCP socket on sending node");
+    }
+
+    // Create and configure the application to send packets
     Ptr<MyApp> app = CreateObject<MyApp>();
-    app->Setup(ns3TcpSocket, sinkAddress, n_bytes, n_packets, DataRate("1Mb/s"));
-    sending_node->AddApplication(app);
+    app->Setup(ns3TcpSocket, sinkAddress, packetSize, nPackets, DataRate("10Mb/s"));
+    sendingNode->AddApplication(app);
 
-    app->SetStartTime(Simulator::Now() + Seconds(0.5));
-    app->SetStopTime(Seconds(simStopTime));
+    // Schedule the start and stop times for the application
+    app->SetStartTime(Seconds(0.5));
+    // app->SetStopTime(Seconds(simStopTime));  // Assuming simStopTime is declared globally
 
-    Config::Connect("/NodeList/*/ApplicationList/*/$ns3::PacketSink/Rx", MakeCallback(&RxCallback));
+    // Connect the callback for when packets are received at the sink
+    Config::Connect("/NodeList/*/ApplicationList/*/$ns3::PacketSink/Rx", 
+                    MakeCallback(&RxCallback));
 }
 
 // Event handling functions
@@ -279,39 +293,85 @@ NotifyHandoverEndOkEnb(std::string context, uint64_t imsi, uint16_t cellid, uint
               << ": completed handover of UE with IMSI " << imsi << " RNTI " << rnti << std::endl;
 }
 
-// Utils functions ===================================
-std::streamsize
-getFileSize(const std::string& filename)
+// Utility Functions ==================================
+// Function to get the size of a file
+std::streamsize getFileSize(const std::string& filename)
 {
-    std::ifstream file(filename, std::ios::binary | std::ios::ate);
+    std::ifstream file(filename, std::ios::binary | std::ios::ate);  // Open file in binary mode at the end
     if (!file.is_open())
     {
-        std::cerr << "Unable to open file: " << filename << std::endl;
-        return -1;
+        std::cerr << "Error: Unable to open file: " << filename << std::endl;
+        return -1;  // Return -1 to indicate an error
     }
-    return file.tellg();
+
+    return file.tellg();  // Get the file size by reading the position of the end of the file
 }
 
-// Run script and measure time function
-int64_t
-runScriptAndMeasureTime(const std::string& scriptPath)
+// Function to extract model path without suffix and extension
+std::string extractModelPath(const std::string& input) 
 {
-    auto start = std::chrono::high_resolution_clock::now();
-    std::string command = "python3 " + scriptPath + " > /dev/null 2>&1";
-    int result = system(command.c_str());
-    auto end = std::chrono::high_resolution_clock::now();
-    int64_t duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+    const std::string modelFlag = "--model ";
+    const std::string extension = ".keras";
+    const std::string modelSuffix = "_model";
+
+    size_t modelPos = input.find(modelFlag);
+    if (modelPos == std::string::npos) 
+    {
+        return "";  // Return empty string if "--model" flag is not found
+    }
+
+    // Start after the "--model " flag
+    size_t start = modelPos + modelFlag.length();
+    // Find the position of the next space after the model path
+    size_t end = input.find(" ", start);
+    if (end == std::string::npos) 
+    {
+        end = input.length();  // If no space is found, assume the model path goes to the end
+    }
+
+    std::string modelPath = input.substr(start, end - start);  // Extract model path
+
+    // Remove the ".keras" extension if it exists
+    size_t extensionPos = modelPath.find(extension);
+    if (extensionPos != std::string::npos) 
+    {
+        modelPath = modelPath.substr(0, extensionPos);
+    }
+
+    // Remove the "_model" suffix if it exists
+    size_t modelSuffixPos = modelPath.rfind(modelSuffix);
+    if (modelSuffixPos != std::string::npos) 
+    {
+        modelPath = modelPath.substr(0, modelSuffixPos);
+    }
+
+    return modelPath;
+}
+
+// Function to run a Python script and measure its execution time
+int64_t runScriptAndMeasureTime(const std::string& scriptPath)
+{
+    auto startTime = std::chrono::high_resolution_clock::now();  // Record start time
+
+    std::string modelPath = extractModelPath(scriptPath);
+    std::string cmdOutputFile = modelPath + ".txt";
+    std::string command = "python3 " + scriptPath + " > " + cmdOutputFile + " 2>&1";  // Redirect output to a file
+
+    int result = system(command.c_str());  // Run the Python script
+    auto endTime = std::chrono::high_resolution_clock::now();  // Record end time
+
+    int64_t duration = std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime).count();  // Calculate duration
 
     if (result != 0)
     {
         std::cerr << "Error: Python script execution failed!" << std::endl;
-        return -1;
+        return -1;  // Return -1 to indicate an error
     }
 
-    std::cout << "Python script " << scriptPath << " executed successfully in " << duration << " ms"
-              << std::endl;
+    std::cout << "Python script " << scriptPath << " executed successfully in " << duration << " ms." << std::endl;
     return duration;
 }
+
 
 struct Clients_Models
 {
@@ -388,69 +448,83 @@ std::vector<Clients_Models> train_clients()
 
     LOG("=================== " << Simulator::Now().GetSeconds() << " seconds.");
 
-    bool dummy = false;
+    bool dummy = true;
 
+    // If dummy mode is enabled, return mock data
     if (dummy)
     {
-        for (uint32_t i = 0; i < ueNodes.GetN(); i++)
+        const int training_time = 5000;  // Constant training time for dummy mode
+        const int bytes = 1000000;       // Constant bytes for dummy mode
+        
+        for (uint32_t i = 0; i < ueNodes.GetN(); ++i)
         {
-            int training_time = 5000;
-            int bytes = 10000;
-            clients_info.push_back(Clients_Models(ueNodes.Get(i), training_time, bytes));
+            clients_info.emplace_back(ueNodes.Get(i), training_time, bytes);
         }
         return clients_info;
     }
 
-    bool training_parallel = true;
-    for (uint32_t i = 0; i < ueNodes.GetN(); i++)
+    bool training_parallel = false;
+
+    // If training is parallel, use async to run training concurrently
+    if (training_parallel)
     {
-        if (training_parallel) {
-            
-        // Using async to launch the tasks in parallel
-        futures.push_back(std::async(std::launch::async, [i]() {
-            std::stringstream cmd;
-            cmd << "scratch/client.py --model models/" << ueNodes.Get(i) << "_model.keras --epochs 5 --n_clients "
-                << ueNodes.GetN() << " --id " << i;
-            LOG(cmd.str());
-            int training_time = runScriptAndMeasureTime(cmd.str()) / ueNodes.GetN();
-
-            // Clear the stringstream and prepare for the next operation
-            cmd.str(std::string());
-            cmd << "models/" << ueNodes.Get(i) << "_model.tflite";
-            int bytes = getFileSize(cmd.str());
-
-            // Return the result as a pair of training time and bytes
-            return std::make_pair(training_time, bytes);
-        }));
-        }
-        else {
-            for (uint32_t i = 0; i < ueNodes.GetN(); i++) {
+        for (uint32_t i = 0; i < ueNodes.GetN(); ++i)
+        {
+            // Launch tasks asynchronously
+            futures.push_back(std::async(std::launch::async, [i]() {
                 std::stringstream cmd;
-                cmd << "scratch/client.py --model models/" << ueNodes.Get(i) << "_model.keras --epochs 1 --n_clients "
-                    << ueNodes.GetN() << " --id " << i;
-                LOG(cmd.str());
-                int training_time = runScriptAndMeasureTime(cmd.str());
+                cmd << "scratch/client.py --model models/" << ueNodes.Get(i) 
+                    << "_model.keras --epochs 5 --n_clients " << ueNodes.GetN() 
+                    << " --id " << i;
 
-                // Clear the stringstream and prepare for the next operation
+                LOG(cmd.str());  // Log the command being executed
+                
+                int training_time = runScriptAndMeasureTime(cmd.str()) / ueNodes.GetN();
+
+                // Reset the stringstream and generate model path
                 cmd.str(std::string());
-                cmd << "models/" << ueNodes.Get(i) << "_model.tflite";
+                cmd << "models/" << ueNodes.Get(i) << "_model.keras";
                 int bytes = getFileSize(cmd.str());
 
-                clients_info.push_back(Clients_Models(ueNodes.Get(i), training_time, bytes));
-            }
-            return clients_info;
+                // Return the result as a pair of training time and bytes
+                return std::make_pair(training_time, bytes);
+            }));
+        }
+
+        // Collect results after all futures are finished
+        for (uint32_t i = 0; i < ueNodes.GetN(); ++i)
+        {
+            auto result = futures[i].get();  // Wait for the result of each future
+            clients_info.emplace_back(ueNodes.Get(i), result.first, result.second);
         }
     }
-
-    // Collect results after all futures have finished executing
-    for (uint32_t i = 0; i < ueNodes.GetN(); i++)
+    else
     {
-        auto result = futures[i].get();  // Wait for each future to complete and get the result
-        clients_info.push_back(Clients_Models(ueNodes.Get(i), result.first, result.second));
+        // Sequential training (non-parallel)
+        for (uint32_t i = 0; i < ueNodes.GetN(); ++i)
+        {
+            std::stringstream cmd;
+            cmd << "scratch/client.py --model models/" << ueNodes.Get(i) 
+                << "_model.keras --epochs 1 --n_clients " << ueNodes.GetN() 
+                << " --id " << i;
+
+            LOG(cmd.str());  // Log the command being executed
+
+            int training_time = runScriptAndMeasureTime(cmd.str());
+
+            // Reset the stringstream to get the model size
+            cmd.str(std::string());
+            cmd << "models/" << ueNodes.Get(i) << "_model.keras";
+            int bytes = getFileSize(cmd.str());
+
+            // Store the client information
+            clients_info.emplace_back(ueNodes.Get(i), training_time, bytes);
+        }
     }
 
     return clients_info;
 }
+
 
 std::vector<Clients_Models>
 client_selection(int n, std::vector<Clients_Models> clients_info)
@@ -495,7 +569,7 @@ send_models_to_server(std::vector<Clients_Models> clients)
         {
             LOG("Client " << i << " scheduling send model.");
             Simulator::Schedule(MilliSeconds(i.training_time),
-                                &sendstream,
+                                &sendStream,
                                 i.node,
                                 remoteHostContainer.Get(0),
                                 i.node_to_bytes);
@@ -573,6 +647,11 @@ round_cleanup()
         auto n_apps = ueNodes.Get(i)->GetNApplications();
         for (uint32_t j = 0; j < n_apps; j++) {
             ueNodes.Get(i)->GetApplication(j)->SetStopTime(Simulator::Now());
+            auto app = DynamicCast<MyApp>(ueNodes.Get(i)->GetApplication(j));
+            app->StopApplication();
+            app->Dispose();
+            app = nullptr;
+            // -> 
         }
     }
     for (uint32_t i = 0; i < remoteHostContainer.GetN(); i++) {
@@ -629,6 +708,7 @@ void
 network_info(Ptr<FlowMonitor> monitor)
 {
     static double lastTotalRxBytes = 0;
+    static double lastTotalTxBytes = 0;
     static double lastTime = 0;
     Simulator::Schedule(Seconds(1), &network_info, monitor);
 
@@ -637,18 +717,23 @@ network_info(Ptr<FlowMonitor> monitor)
     FlowMonitor::FlowStatsContainer stats = monitor->GetFlowStats();
 
     double totalRxBytes = 0;
+    double totalTxBytes = 0;
     for (auto i = stats.begin(); i != stats.end(); ++i)
     {
         totalRxBytes += i->second.rxBytes;
+        totalTxBytes += i->second.txBytes;
     }
 
     double currentTime = Simulator::Now().GetSeconds();
     double timeDiff = currentTime - lastTime;
     double instantThroughput = (totalRxBytes - lastTotalRxBytes) * 8.0 / timeDiff / 1000 / 1000;
+    double instantTxThroughput = (totalTxBytes - lastTotalTxBytes) * 8.0 / timeDiff / 1000 / 1000;
 
     LOG(currentTime << "s: Instant Network Throughput: " << instantThroughput << " Mbps");
+    LOG(currentTime << "s: Instant Tx Throughput: " << instantTxThroughput << " Mbps");
 
     lastTotalRxBytes = totalRxBytes;
+    lastTotalTxBytes = totalTxBytes;
     lastTime = currentTime;
 }
 
@@ -656,16 +741,18 @@ network_info(Ptr<FlowMonitor> monitor)
 int
 main(int argc, char* argv[])
 {
-    // Config::SetDefault("ns3::LteRlcUm::MaxTxBufferSize", UintegerValue(10 * 1024 * 1024));
-    // Config::SetDefault("ns3::LteRlcAm::MaxTxBufferSize", UintegerValue(10 * 1024 * 1024));
-    // Config::SetDefault("ns3::LteRlcUmLowLat::MaxTxBufferSize", UintegerValue(10 * 1024 * 1024));
-    // Config::SetDefault("ns3::TcpL4Protocol::SocketType", TypeIdValue(TcpCubic::GetTypeId()));
-    // Config::SetDefault("ns3::TcpSocketBase::MinRto", TimeValue(MilliSeconds(200)));
-    // Config::SetDefault("ns3::Ipv4L3Protocol::FragmentExpirationTimeout", TimeValue(Seconds(0.2)));
-    // Config::SetDefault("ns3::TcpSocket::SegmentSize", UintegerValue(2500));
-    // Config::SetDefault("ns3::TcpSocket::DelAckCount", UintegerValue(1));
-    // Config::SetDefault("ns3::TcpSocket::SndBufSize", UintegerValue(131072 * 100));
-    // Config::SetDefault("ns3::TcpSocket::RcvBufSize", UintegerValue(131072 * 100));
+
+
+    Config::SetDefault("ns3::LteRlcUm::MaxTxBufferSize", UintegerValue(10 * 1024 * 1024 * 10));
+    Config::SetDefault("ns3::LteRlcAm::MaxTxBufferSize", UintegerValue(10 * 1024 * 1024));
+    Config::SetDefault("ns3::LteRlcUmLowLat::MaxTxBufferSize", UintegerValue(10 * 1024 * 1024));
+    Config::SetDefault("ns3::TcpL4Protocol::SocketType", TypeIdValue(TcpCubic::GetTypeId()));
+    Config::SetDefault("ns3::TcpSocketBase::MinRto", TimeValue(MilliSeconds(200)));
+    Config::SetDefault("ns3::Ipv4L3Protocol::FragmentExpirationTimeout", TimeValue(Seconds(2)));
+    Config::SetDefault("ns3::TcpSocket::SegmentSize", UintegerValue(2500));
+    Config::SetDefault("ns3::TcpSocket::DelAckCount", UintegerValue(1));
+    Config::SetDefault("ns3::TcpSocket::SndBufSize", UintegerValue(131072 * 100 * 10));
+    Config::SetDefault("ns3::TcpSocket::RcvBufSize", UintegerValue(131072 * 100 * 10));
     // Config::SetDefault("ns3::PhasedArrayModel::AntennaElement",
     //                    PointerValue(CreateObject<IsotropicAntennaModel>()));
 
@@ -674,8 +761,8 @@ main(int argc, char* argv[])
     // LogComponentEnable("MmWaveUeNetDevice", LOG_LEVEL_ALL);
     Config::SetDefault("ns3::ComponentCarrier::UlBandwidth", UintegerValue(50));
     Config::SetDefault("ns3::ComponentCarrier::PrimaryCarrier", BooleanValue(true));
-        Config::SetDefault("ns3::LteSpectrumPhy::CtrlErrorModelEnabled", BooleanValue(false));
-    Config::SetDefault("ns3::LteSpectrumPhy::DataErrorModelEnabled", BooleanValue(false));
+        Config::SetDefault("ns3::LteSpectrumPhy::CtrlErrorModelEnabled", BooleanValue(true));
+    Config::SetDefault("ns3::LteSpectrumPhy::DataErrorModelEnabled", BooleanValue(true));
     Config::SetDefault("ns3::LteHelper::UseIdealRrc", BooleanValue(true));
     Config::SetDefault("ns3::LteHelper::UsePdschForCqiGeneration", BooleanValue(true));
 
@@ -695,13 +782,18 @@ main(int argc, char* argv[])
     // Config::SetDefault("ns3::LteEnbRrc::SecondaryCellHandoverMode",
     //                        EnumValue(LteEnbRrc::THRESHOLD));
 
+
+
     Ptr<LteHelper> mmwaveHelper = CreateObject<LteHelper>();
     Ptr<PointToPointEpcHelper> epcHelper = CreateObject<PointToPointEpcHelper>();
     mmwaveHelper->SetEpcHelper(epcHelper);
     mmwaveHelper->SetSchedulerType("ns3::RrFfMacScheduler");
-    mmwaveHelper->SetHandoverAlgorithmType("ns3::A3RsrpHandoverAlgorithm");
-    mmwaveHelper->SetHandoverAlgorithmAttribute("Hysteresis", DoubleValue(0));
-    mmwaveHelper->SetHandoverAlgorithmAttribute("TimeToTrigger", TimeValue(MilliSeconds(256)));
+    // mmwaveHelper->SetHandoverAlgorithmType("ns3::A3RsrpHandoverAlgorithm");
+    // mmwaveHelper->SetHandoverAlgorithmAttribute("Hysteresis", DoubleValue(3));
+    // mmwaveHelper->SetHandoverAlgorithmAttribute("TimeToTrigger", TimeValue(MilliSeconds(256)));
+    mmwaveHelper->SetHandoverAlgorithmType("ns3::A2A4RsrqHandoverAlgorithm");
+    mmwaveHelper->SetHandoverAlgorithmAttribute("ServingCellThreshold", UintegerValue(30));
+    mmwaveHelper->SetHandoverAlgorithmAttribute("NeighbourCellOffset", UintegerValue(1));
 
     ConfigStore inputConfig;
     inputConfig.ConfigureDefaults();
@@ -744,12 +836,12 @@ main(int argc, char* argv[])
         enbPositionAlloc->Add(Vector(dist(rng), dist(rng), dist(rng)));
     }
 
-    // std::string traceFile = "campus.ns_movements";
-    // Ns2MobilityHelper ns2 = Ns2MobilityHelper(traceFile);
-    // ns2.Install(ueNodes.Begin(), ueNodes.End());
-    uemobility.SetMobilityModel("ns3::ConstantPositionMobilityModel");
-    uemobility.SetPositionAllocator(uePositionAlloc);
-    uemobility.Install(ueNodes);
+    std::string traceFile = "campus.ns_movements";
+    Ns2MobilityHelper ns2 = Ns2MobilityHelper(traceFile);
+    ns2.Install(ueNodes.Begin(), ueNodes.End());
+    // uemobility.SetMobilityModel("ns3::ConstantPositionMobilityModel");
+    // uemobility.SetPositionAllocator(uePositionAlloc);
+    // uemobility.Install(ueNodes);
 
     enbmobility.SetMobilityModel("ns3::ConstantPositionMobilityModel");
     enbmobility.SetPositionAllocator(enbPositionAlloc);
@@ -757,8 +849,8 @@ main(int argc, char* argv[])
     enbmobility.Install(pgw);
     enbmobility.Install(remoteHost);
 
-    Config::SetDefault("ns3::LteEnbPhy::TxPower", DoubleValue(43.0));
-    Config::SetDefault("ns3::LteUePhy::TxPower", DoubleValue(20.0));
+    // Config::SetDefault("ns3::LteEnbPhy::TxPower", DoubleValue(43.0));
+    // Config::SetDefault("ns3::LteUePhy::TxPower", DoubleValue(20.0));
     NetDeviceContainer enbDevs = mmwaveHelper->InstallEnbDevice(enbNodes);
     NetDeviceContainer ueDevs = mmwaveHelper->InstallUeDevice(ueNodes);
 

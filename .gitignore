@@ -4,7 +4,11 @@
 *.rej
 
 *keras
+data
 *.json
+*.python
+*.txt
+*.pth
 *.tflite
 campus*
 *Ul
