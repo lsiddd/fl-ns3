@@ -3,12 +3,11 @@ import tensorflow as tf
 import numpy as np
 from sklearn.model_selection import train_test_split
 import zlib
+import json
 
 os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
 
 # Load FashionMNIST dataset
-
-
 def load_fashionmnist_data(validation_split=0.2):
     (x_train, y_train), (x_test, y_test) = tf.keras.datasets.fashion_mnist.load_data()
 
@@ -23,25 +22,37 @@ def load_fashionmnist_data(validation_split=0.2):
 
     return (x_train, y_train), (x_val, y_val), (x_test, y_test)
 
+# Function to load selected models from the JSON file
+def load_selected_clients(json_file):
+    with open(json_file, 'r') as file:
+        data = json.load(file)
+    return data["selected_clients"]
 
-# Function to load models from a directory
-
-
-def load_models_from_directory(directory):
+# Function to load only selected models from a directory
+def load_models_from_selected_clients(directory, selected_clients):
     models = []
     model_filenames = []
+
+    # the filenames saved contain the models/ directory, so we extract it from the string
+    selected_clients = [i.split("/")[1] for i in selected_clients]
+
+    # iterate all files found in the directory
     for filename in os.listdir(directory):
-        if filename.endswith(".keras"):
+        # check if the filename matches the name of the saved model for the selected clients
+        if filename in selected_clients:
+            # join the models/ string again to get the path
             model_path = os.path.join(directory, filename)
+            # load model
             model = tf.keras.models.load_model(model_path)
+            # add to the models list
             models.append(model)
+            # add to the models filenames list
             model_filenames.append(model_path)
+    
+    # return the model objects and filenames
     return models, model_filenames
 
-
 # FedAvg: Averages the weights of the models
-
-
 def fedavg(models):
     # Get the weights from each model
     weights = [model.get_weights() for model in models]
@@ -62,10 +73,7 @@ def fedavg(models):
 
     return avg_weights
 
-
 # Function to quantize weights
-
-
 def quantize_weights(weights, quantization_levels):
     quantized_weights = []
     for layer_weights in weights:
@@ -86,10 +94,7 @@ def quantize_weights(weights, quantization_levels):
 
     return quantized_weights
 
-
 # Function to compress the quantized weights using zlib
-
-
 def compress_weights(weights):
     # Flatten the weights to compress
     flat_weights = np.concatenate([w.flatten() for w in weights])
@@ -102,18 +107,16 @@ def compress_weights(weights):
 
     return compressed_weights
 
-
 # Function to save the FedAvg model and replace individual models
-
-
 def save_and_replace_fedavg_model(
-    directory, output_path, validation_data, quantization_levels=256
+    directory, output_path, validation_data, selected_clients, quantization_levels=256
 ):
-    # Load all models from the directory
-    models, model_filenames = load_models_from_directory(directory)
+    # Load only the selected models from the directory
+    models, model_filenames = load_models_from_selected_clients(directory, selected_clients)
+    all_models_filenames = [i for i in os.listdir(directory) if ".keras" in i]
 
     if len(models) == 0:
-        raise ValueError("No models found in the directory with .keras extension.")
+        raise ValueError("No selected models found in the directory with .keras extension.")
 
     # Perform FedAvg to average the weights
     avg_weights = fedavg(models)
@@ -143,7 +146,8 @@ def save_and_replace_fedavg_model(
     val_loss, val_accuracy = model_template.evaluate(x_val, y_val, verbose=2)
 
     # Replace individual client models with the aggregated model
-    for model_path in model_filenames:
+    for model_path in all_models_filenames:
+        model_path = os.path.join(directory, model_path)
         # Save the aggregated weights in place of the original model
         model_template.save(model_path)
         print(f"Replaced client model at: {model_path}")
@@ -154,20 +158,22 @@ def save_and_replace_fedavg_model(
 
     return val_loss, val_accuracy, compressed_size
 
-
 # Main workflow
 if __name__ == "__main__":
     # Paths
-    directory_path = "models/"  # Replace with your directory containing .h5 models
-    # Replace with desired output path
-    output_model_path = "models/fedavg_model.keras"
+    directory_path = "models/"  # Directory containing .keras models
+    json_file_path = "selected_clients.json"  # JSON file with selected clients
+    output_model_path = "models/fedavg_model.keras"  # Output path for FedAvg model
+
+    # Load selected clients from JSON
+    selected_clients = load_selected_clients(json_file_path)
 
     # Load FashionMNIST data and get validation split
     (_, _), (x_val, y_val), (_, _) = load_fashionmnist_data(validation_split=0.2)
 
     # Save and replace individual models with the FedAvg model
     val_loss, val_accuracy, compressed_size = save_and_replace_fedavg_model(
-        directory_path, output_model_path, (x_val, y_val), quantization_levels=256
+        directory_path, output_model_path, (x_val, y_val), selected_clients, quantization_levels=256
     )
 
     print(f"Validation Loss: {val_loss}")
