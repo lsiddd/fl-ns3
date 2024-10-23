@@ -26,7 +26,7 @@ def load_fashionmnist_data(validation_split=0.2):
 def load_selected_clients(json_file):
     with open(json_file, 'r') as file:
         data = json.load(file)
-    return data["selected_clients"]
+    return data["successful_clients"]
 
 # Function to load only selected models from a directory
 def load_models_from_selected_clients(directory, selected_clients):
@@ -38,6 +38,7 @@ def load_models_from_selected_clients(directory, selected_clients):
 
     # iterate all files found in the directory
     for filename in os.listdir(directory):
+        print(filename)
         # check if the filename matches the name of the saved model for the selected clients
         if filename in selected_clients:
             # join the models/ string again to get the path
@@ -113,7 +114,7 @@ def save_and_replace_fedavg_model(
 ):
     # Load only the selected models from the directory
     models, model_filenames = load_models_from_selected_clients(directory, selected_clients)
-    all_models_filenames = [i for i in os.listdir(directory) if ".keras" in i]
+    all_models_filenames = [i for i in os.listdir(directory) if i.endswith(".keras")]
 
     if len(models) == 0:
         raise ValueError("No selected models found in the directory with .keras extension.")
@@ -138,6 +139,7 @@ def save_and_replace_fedavg_model(
     model_template.set_weights(quantized_weights)
 
     # Save the new FedAvg model
+    print(output_path)
     model_template.save(output_path)
     print(f"FedAvg model saved at: {output_path}")
 
@@ -149,12 +151,27 @@ def save_and_replace_fedavg_model(
     for model_path in all_models_filenames:
         model_path = os.path.join(directory, model_path)
         # Save the aggregated weights in place of the original model
+        print(model_path)
         model_template.save(model_path)
         print(f"Replaced client model at: {model_path}")
 
     with open("metrics.txt", "a+") as metrics_file:
         metrics_file.write(f"Validation Loss: {val_loss}\n")
         metrics_file.write(f"Validation Accuracy: {val_accuracy}\n")
+    
+    # Create a dictionary with evaluation metrics
+    evaluation_metrics = {
+        "Validation Loss": val_loss,
+        "Validation Accuracy": val_accuracy,
+        "Compressed Model Size (bytes)": compressed_size
+    }
+
+    # Save the evaluation metrics to a JSON file
+    with open("evaluation_metrics.json", "w") as json_file:
+        json.dump(evaluation_metrics, json_file, indent=4)
+
+    print(f"Evaluation metrics saved to evaluation_metrics.json")
+
 
     return val_loss, val_accuracy, compressed_size
 
@@ -162,7 +179,7 @@ def save_and_replace_fedavg_model(
 if __name__ == "__main__":
     # Paths
     directory_path = "models/"  # Directory containing .keras models
-    json_file_path = "selected_clients.json"  # JSON file with selected clients
+    json_file_path = "successful_clients.json"  # JSON file with selected clients
     output_model_path = "models/fedavg_model.keras"  # Output path for FedAvg model
 
     # Load selected clients from JSON

@@ -10,6 +10,20 @@ import zlib
 import json
 import time
 
+# Check if GPU is available
+physical_devices = tf.config.list_physical_devices('GPU')
+if physical_devices:
+    try:
+        # Set memory growth to prevent TensorFlow from occupying all the GPU memory
+        for device in physical_devices:
+            tf.config.experimental.set_memory_growth(device, True)
+        print(f"GPUs are available and memory growth is enabled: {physical_devices}")
+    except RuntimeError as e:
+        print(f"Error setting up GPU: {e}")
+else:
+    print("No GPU available, using CPU.")
+
+
 app = FastAPI()
 
 # Load data globally
@@ -47,20 +61,20 @@ def load_model_from_file(model_filename):
     else:
         print(f"Model file {model_filename} does not exist. Creating a new model.")
         return tf.keras.Sequential([
-            tf.keras.layers.Conv2D(32, (3, 3), padding="same", activation="relu", input_shape=(28, 28, 1)),
+            tf.keras.layers.Conv2D(64, (3, 3), padding="same", activation="relu", input_shape=(28, 28, 1)),
             tf.keras.layers.BatchNormalization(),
-            tf.keras.layers.Conv2D(32, (3, 3), padding="same", activation="relu"),
+            tf.keras.layers.Conv2D(64, (3, 3), padding="same", activation="relu"),
             tf.keras.layers.BatchNormalization(),
             tf.keras.layers.MaxPooling2D((2, 2)),
             tf.keras.layers.Dropout(0.25),
-            tf.keras.layers.Conv2D(64, (3, 3), padding="same", activation="relu"),
+            tf.keras.layers.Conv2D(128, (3, 3), padding="same", activation="relu"),
             tf.keras.layers.BatchNormalization(),
-            tf.keras.layers.Conv2D(64, (3, 3), padding="same", activation="relu"),
+            tf.keras.layers.Conv2D(128, (3, 3), padding="same", activation="relu"),
             tf.keras.layers.BatchNormalization(),
             tf.keras.layers.MaxPooling2D((2, 2)),
             tf.keras.layers.Dropout(0.25),
             tf.keras.layers.Flatten(),
-            tf.keras.layers.Dense(128, activation="relu"),
+            tf.keras.layers.Dense(256, activation="relu"),
             tf.keras.layers.Dropout(0.25),
             tf.keras.layers.BatchNormalization(),
             tf.keras.layers.Dense(128, activation="relu"),
@@ -86,7 +100,7 @@ def process_queue():
             # Execute training
             train_images_chunk, train_labels_chunk = split_data(train_images, train_labels, client_request.n_clients, client_request.client_id)
             start_time = time.time()
-            train_model(model, train_images_chunk, train_labels_chunk, test_images, test_labels, epochs=client_request.epochs)
+            history = train_model(model, train_images_chunk, train_labels_chunk, test_images, test_labels, epochs=client_request.epochs)
             end_time = time.time()
 
             # Save the updated model for this client
@@ -120,7 +134,12 @@ def process_queue():
                 "uncompressed_size": uncompressed_size,
                 "compressed_size": compressed_size,
                 "compressed_top_n_size": compressed_top_n_size,
-                "duration": (end_time - start_time) * 1000
+                "duration": (end_time - start_time) * 1000,
+                "loss": history.history['loss'][0], #: A list of training loss values per epoch.
+                "accuracy": history.history['accuracy'][0], #: A list of training accuracy values per epoch.
+                "val_loss": history.history['val_loss'][0], #: A list of validation loss values per epoch.
+                "val_accuracy": history.history['val_accuracy'][0], #: A list of validation accuracy values per epoch.
+                "layer_importances": layer_importances,
             }
 
             with open(f"{client_request.model.split('.')[0]}_model_sizes.json", "w") as f:
@@ -213,7 +232,7 @@ def train_model_endpoint(request: TrainRequest):
 
     # Add the client training request to the queue
     client_queue.put(request)
-    return {"message": f"Client {request.client_id} added to the training queue."}
+    return {"message": f"Client {request.client_id} added to the training queue.\n"}
 
 
 # Start a background thread to process the queue
@@ -222,4 +241,4 @@ threading.Thread(target=process_queue, daemon=True).start()
 # Start the service with uvicorn
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8182)

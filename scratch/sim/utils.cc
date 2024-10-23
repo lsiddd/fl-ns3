@@ -3,6 +3,7 @@
 #include "utils.h"
 
 #include "MyApp.h"
+#include "json.hpp"
 
 #include "ns3/applications-module.h"
 #include "ns3/command-line.h"
@@ -53,8 +54,7 @@ ReportUeSinrRsrp(uint16_t cellId,
 std::vector<NodesIps>node_to_ips()
 {
     std::vector<NodesIps> nodes_ips;
-    for (uint32_t i = 0; i < ueNodes.GetN(); i++)
-    {
+    for (uint32_t i = 0; i < ueNodes.GetN(); i++) {
         Ipv4Address receiving_address;
         Ptr<Ipv4> ipv4 = ueNodes.Get(i)->GetObject<Ipv4>();
         Ipv4InterfaceAddress iaddr = ipv4->GetAddress(1, 0);
@@ -76,8 +76,7 @@ RxCallback(const std::string path, Ptr<const Packet> packet, const Address& from
     InetSocketAddress address = InetSocketAddress::ConvertFrom(from);
     Ipv4Address senderIp = address.GetIpv4();
 
-    if (dataAsString.find('b') != std::string::npos)
-    {
+    if (dataAsString.find('b') != std::string::npos) {
         double receiveTime = Simulator::Now().GetSeconds();
         std::cout << "Stream ending signal ('b') received from " << senderIp << " at time "
                   << receiveTime << " seconds." << std::endl;
@@ -97,8 +96,7 @@ sendStream(Ptr<Node> sendingNode, Ptr<Node> receivingNode, int size)
 
     // Get receiving node's IPv4 address
     Ptr<Ipv4> ipv4 = receivingNode->GetObject<Ipv4>();
-    if (!ipv4)
-    {
+    if (!ipv4) {
         NS_FATAL_ERROR("No Ipv4 object found on receiving node");
     }
 
@@ -119,8 +117,7 @@ sendStream(Ptr<Node> sendingNode, Ptr<Node> receivingNode, int size)
 
     // Create the sending socket
     Ptr<Socket> ns3TcpSocket = Socket::CreateSocket(sendingNode, TcpSocketFactory::GetTypeId());
-    if (!ns3TcpSocket)
-    {
+    if (!ns3TcpSocket) {
         NS_FATAL_ERROR("Failed to create TCP socket on sending node");
     }
 
@@ -151,8 +148,7 @@ getFileSize(const std::string& filename)
 {
     std::ifstream file(filename,
                        std::ios::binary | std::ios::ate); // Open file in binary mode at the end
-    if (!file.is_open())
-    {
+    if (!file.is_open()) {
         std::cerr << "Error: Unable to open file: " << filename << std::endl;
         return -1; // Return -1 to indicate an error
     }
@@ -169,8 +165,7 @@ extractModelPath(const std::string& input)
     const std::string modelSuffix = "_model";
 
     size_t modelPos = input.find(modelFlag);
-    if (modelPos == std::string::npos)
-    {
+    if (modelPos == std::string::npos) {
         return ""; // Return empty string if "--model" flag is not found
     }
 
@@ -178,8 +173,7 @@ extractModelPath(const std::string& input)
     size_t start = modelPos + modelFlag.length();
     // Find the position of the next space after the model path
     size_t end = input.find(" ", start);
-    if (end == std::string::npos)
-    {
+    if (end == std::string::npos) {
         end = input.length(); // If no space is found, assume the model path goes to the end
     }
 
@@ -187,15 +181,13 @@ extractModelPath(const std::string& input)
 
     // Remove the ".keras" extension if it exists
     size_t extensionPos = modelPath.find(extension);
-    if (extensionPos != std::string::npos)
-    {
+    if (extensionPos != std::string::npos) {
         modelPath = modelPath.substr(0, extensionPos);
     }
 
     // Remove the "_model" suffix if it exists
     size_t modelSuffixPos = modelPath.rfind(modelSuffix);
-    if (modelSuffixPos != std::string::npos)
-    {
+    if (modelSuffixPos != std::string::npos) {
         modelPath = modelPath.substr(0, modelSuffixPos);
     }
 
@@ -217,10 +209,9 @@ runScriptAndMeasureTime(const std::string& scriptPath)
     auto endTime = std::chrono::high_resolution_clock::now(); // Record end time
 
     int64_t duration = std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime)
-                           .count(); // Calculate duration
+                       .count(); // Calculate duration
 
-    if (result != 0)
-    {
+    if (result != 0) {
         std::cerr << "Error: Python script execution failed!" << std::endl;
         return -1; // Return -1 to indicate an error
     }
@@ -230,51 +221,42 @@ runScriptAndMeasureTime(const std::string& scriptPath)
     return duration;
 }
 
+
 bool
 finished_transmission(std::vector<NodesIps> nodes_ips, std::vector<Clients_Models>& clients_info)
 {
     bool finished = true;
     bool clients_selected = false;
-    for (auto c : clients_info)
-    {
-        if (c.selected)
-        {
+    for (auto c : clients_info) {
+        if (c.selected) {
             clients_selected = true;
             bool client_finished = false;
             auto node_id = c.node->GetId();
             Ipv4Address node_ip;
-            for (auto nip : nodes_ips)
-            {
-                if (nip.node_id == node_id)
-                {
+            for (auto nip : nodes_ips) {
+                if (nip.node_id == node_id) {
                     node_ip = nip.ip;
                     // LOG("considering client " << node_ip);
                 }
             }
-            for (auto stream_end_time : endOfStreamTimes)
-            {
+            for (auto stream_end_time : endOfStreamTimes) {
                 // LOG(stream_end_time.first << node_ip);
-                if (stream_end_time.first == node_ip)
-                {
+                if (stream_end_time.first == node_ip) {
                     // LOG(stream_end_time.first << " " << node_ip);
                     client_finished = true;
                 }
             }
-            if (!client_finished)
-            {
+            if (!client_finished) {
                 finished = false;
             }
         }
 
         // return true;
     }
-    if (finished && clients_selected)
-    {
-        LOG("round finished");
+    if (finished && clients_selected) {
+        LOG("round finished at " << Simulator::Now().GetSeconds() << " seconds.");
         return true;
-    }
-    else
-    {
+    } else {
         return false;
     }
 }
@@ -293,8 +275,7 @@ network_info(Ptr<FlowMonitor> monitor)
 
     double totalRxBytes = 0;
     double totalTxBytes = 0;
-    for (auto i = stats.begin(); i != stats.end(); ++i)
-    {
+    for (auto i = stats.begin(); i != stats.end(); ++i) {
         totalRxBytes += i->second.rxBytes;
         totalTxBytes += i->second.txBytes;
     }
@@ -316,11 +297,9 @@ void
 round_cleanup()
 {
     endOfStreamTimes.clear();
-    for (uint32_t i = 0; i < ueNodes.GetN(); i++)
-    {
+    for (uint32_t i = 0; i < ueNodes.GetN(); i++) {
         auto n_apps = ueNodes.Get(i)->GetNApplications();
-        for (uint32_t j = 0; j < n_apps; j++)
-        {
+        for (uint32_t j = 0; j < n_apps; j++) {
             ueNodes.Get(i)->GetApplication(j)->SetStopTime(Simulator::Now());
             auto app = DynamicCast<MyApp>(ueNodes.Get(i)->GetApplication(j));
             app->StopApplication();
@@ -329,11 +308,9 @@ round_cleanup()
             // ->
         }
     }
-    for (uint32_t i = 0; i < remoteHostContainer.GetN(); i++)
-    {
+    for (uint32_t i = 0; i < remoteHostContainer.GetN(); i++) {
         auto n_apps = remoteHostContainer.Get(i)->GetNApplications();
-        for (uint32_t j = 0; j < n_apps; j++)
-        {
+        for (uint32_t j = 0; j < n_apps; j++) {
             remoteHostContainer.Get(i)->GetApplication(j)->SetStopTime(Simulator::Now());
         }
     }

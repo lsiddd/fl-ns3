@@ -35,9 +35,8 @@ void MyApp::StartApplication()
 {
     m_running = true;
     m_packetsSent = 0;
-    
-    if (!m_socket)
-    {
+
+    if (!m_socket) {
         NS_FATAL_ERROR("Socket not initialized");
     }
 
@@ -50,13 +49,11 @@ void MyApp::StopApplication()
 {
     m_running = false;
 
-    if (m_sendEvent.IsPending())
-    {
+    if (m_sendEvent.IsPending()) {
         Simulator::Cancel(m_sendEvent);
     }
 
-    if (m_socket)
-    {
+    if (m_socket) {
         m_socket->Close();
     }
 }
@@ -64,28 +61,23 @@ void MyApp::StopApplication()
 void MyApp::SendPacket()
 {
     Ptr<Packet> packet = Create<Packet>(m_packetSize);
-    
-    if (m_packetsSent + 1 == m_nPackets)
-    {
+
+    if (m_packetsSent + 1 == m_nPackets) {
         m_socket->Send(m_data_fin, m_writeSize, 0);
-    }
-    else
-    {
+    } else {
         m_socket->Send(m_data, m_writeSize, 0);
     }
 
     ++m_packetsSent;
 
-    if (m_packetsSent < m_nPackets)
-    {
+    if (m_packetsSent < m_nPackets) {
         ScheduleTx();
     }
 }
 
 void MyApp::ScheduleTx()
 {
-    if (m_running)
-    {
+    if (m_running) {
         double seconds = static_cast<double>(m_packetSize * 8) / m_dataRate.GetBitRate();
         Time tNext = Seconds(seconds);
         m_sendEvent = Simulator::Schedule(tNext, &MyApp::SendPacket, this);
