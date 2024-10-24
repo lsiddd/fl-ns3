@@ -1,4 +1,0 @@
-set val(x) 120.0
-set val(y) 120.0
-set val(nn) 100
-set val(duration) 1000.0

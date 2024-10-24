@@ -17,6 +17,9 @@ campus*
 *xml
 models
 *h5
+*class
+old_files
+BonnMotion/bin/*
 
 *.o
 *.pyc

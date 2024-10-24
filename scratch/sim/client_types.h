@@ -16,8 +16,7 @@
 
 using namespace ns3;
 
-struct Clients_Models
-{
+struct Clients_Models {
     Ptr<Node> node;
     int training_time;
     int node_to_bytes;
@@ -38,8 +37,7 @@ struct Clients_Models
 // Overload the '<<' operator for Clients_Models to display RSRP and SINR
 std::ostream& operator<<(std::ostream& os, const Clients_Models& model);
 
-struct NodesIps
-{
+struct NodesIps {
     uint32_t node_id;
     uint32_t index;
     Ipv4Address ip;

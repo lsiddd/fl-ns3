@@ -8,6 +8,7 @@ import threading
 from queue import Queue
 import zlib
 import json
+import concurrent.futures
 import time
 
 # Check if GPU is available
@@ -119,7 +120,10 @@ def process_queue():
 
             uncompressed_size = os.path.getsize(client_request.model)
 
+            time_to_rank_start = time.time()
             layer_importances = rank_model_layers(model, test_images, test_labels)
+            time_to_rank_end = time.time()
+            print(f" ranking layers took {time_to_rank_end - time_to_rank_start} seconds")
 
             top_n_layers = [
                 model.layers[layer_index]
@@ -179,21 +183,81 @@ def compress_weights(weights):
     return compressed_weights
 
 
-def rank_model_layers(model, test_images, test_labels):
-    base_accuracy = model.evaluate(test_images, test_labels, verbose=0)[1]
-    layer_impact = []
-    for i, layer in enumerate(model.layers):
+# def rank_model_layers(model, test_images, test_labels):
+#     base_accuracy = model.evaluate(test_images, test_labels, verbose=0)[1]
+#     layer_impact = []
+#     for i, layer in enumerate(model.layers):
+#         original_weights = layer.get_weights()
+#         if not original_weights:
+#             continue
+#         zeroed_weights = [np.zeros_like(w) for w in original_weights]
+#         layer.set_weights(zeroed_weights)
+#         perturbed_accuracy = model.evaluate(test_images, test_labels, verbose=0)[1]
+#         accuracy_drop = base_accuracy - perturbed_accuracy
+#         layer_impact.append((i, layer.name, accuracy_drop))
+#         layer.set_weights(original_weights)
+#     layer_impact.sort(key=lambda x: x[2], reverse=True)
+#     return layer_impact
+
+
+def rank_model_layers(model, test_images, test_labels, subset_size=1000, max_workers=4):
+    """
+    Rank the importance of layers by measuring the accuracy drop when layer weights are zeroed out.
+    Uses parallel processing to evaluate layer impacts concurrently and samples a subset of test data to speed up evaluation.
+    
+    Parameters:
+        model: Trained Keras model.
+        test_images: Test images dataset.
+        test_labels: Test labels corresponding to test_images.
+        subset_size: Number of samples to use for each evaluation (to speed up evaluation).
+        max_workers: Number of parallel workers to use for evaluating layer impacts.
+
+    Returns:
+        List of tuples containing layer index, layer name, and accuracy drop.
+    """
+    # Sample a subset of the test set for faster evaluation
+    if subset_size and subset_size < len(test_images):
+        indices = np.random.choice(len(test_images), subset_size, replace=False)
+        test_images_subset = test_images[indices]
+        test_labels_subset = test_labels[indices]
+    else:
+        test_images_subset = test_images
+        test_labels_subset = test_labels
+    
+    # Get base accuracy of the model on the subset
+    base_accuracy = model.evaluate(test_images_subset, test_labels_subset, verbose=0)[1]
+    
+    def evaluate_layer_impact(i, layer):
+        """Helper function to evaluate the accuracy drop when a layer's weights are zeroed out."""
         original_weights = layer.get_weights()
         if not original_weights:
-            continue
+            return i, layer.name, 0  # Skip layers without weights (like activation or dropout)
+        
+        # Zero out the layer's weights
         zeroed_weights = [np.zeros_like(w) for w in original_weights]
         layer.set_weights(zeroed_weights)
-        perturbed_accuracy = model.evaluate(test_images, test_labels, verbose=0)[1]
+        
+        # Evaluate the model with zeroed weights
+        perturbed_accuracy = model.evaluate(test_images_subset, test_labels_subset, verbose=0)[1]
         accuracy_drop = base_accuracy - perturbed_accuracy
-        layer_impact.append((i, layer.name, accuracy_drop))
+        
+        # Restore the original weights
         layer.set_weights(original_weights)
+        
+        return i, layer.name, accuracy_drop
+
+    # Use concurrent processing to evaluate layers in parallel
+    layer_impact = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = [executor.submit(evaluate_layer_impact, i, layer) for i, layer in enumerate(model.layers)]
+        for future in concurrent.futures.as_completed(futures):
+            layer_impact.append(future.result())
+    
+    # Sort layers by the accuracy drop in descending order
     layer_impact.sort(key=lambda x: x[2], reverse=True)
+    
     return layer_impact
+
 
 
 def compute_shap_values(model, data):
