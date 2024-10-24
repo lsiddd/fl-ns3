@@ -48,8 +48,8 @@ using json = nlohmann::json;
 NS_LOG_COMPONENT_DEFINE("Simulation");
 
 // Global constants
-static constexpr double simStopTime = 1000.0;
-static constexpr int number_of_ues = 5;
+static constexpr double simStopTime = 500.0;
+static constexpr int number_of_ues = 10;
 static constexpr int number_of_enbs = 10;
 static constexpr int n_participating_clients = number_of_ues / 2;
 static constexpr int scenario_size = 1000;
@@ -86,7 +86,7 @@ std::vector<Clients_Models> clients_info;
 std::vector<Clients_Models> selected_clients;
 
 // Timeout for certain operations
-Time timeout = Seconds(200);
+Time timeout = Seconds(100);
 
 std::vector<Clients_Models> train_clients()
 {
