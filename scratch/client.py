@@ -138,6 +138,7 @@ def process_queue():
                 results = {
                     "uncompressed_size": uncompressed_size,
                     "compressed_size": compressed_size,
+                    "number_of_samples": len(train_images_chunk),
                     "compressed_top_n_size": compressed_top_n_size,
                     "duration": (end_time - start_time) * 1000,
                     "loss": history.history['loss'][0],

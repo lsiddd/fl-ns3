@@ -1,23 +1,25 @@
 #include "client_types.h"
 
 // Implementation of Clients_Models constructors
-Clients_Models::Clients_Models(Ptr<Node> n, int t, int b, bool s, double r, double sin)
+Clients_Models::Clients_Models(Ptr<Node> n, int t, int b, bool s, double r, double sin, double acc)
     : node(n),
       training_time(t),
       node_to_bytes(b),
       selected(s),
       rsrp(r),
-      sinr(sin)
+      sinr(sin),
+      accuracy(acc)
 {
 }
 
-Clients_Models::Clients_Models(Ptr<Node> n, int t, int b, double r, double sin)
+Clients_Models::Clients_Models(Ptr<Node> n, int t, int b, double r, double sin, double acc)
     : node(n),
       training_time(t),
       node_to_bytes(b),
       selected(false),
       rsrp(r),
-      sinr(sin)
+      sinr(sin),
+      accuracy(acc)
 {
 }
 

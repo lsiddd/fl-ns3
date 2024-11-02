@@ -23,12 +23,13 @@ struct Clients_Models {
     bool selected;
     double rsrp;
     double sinr;
+    double accuracy;
 
     // Constructor with all parameters
-    Clients_Models(Ptr<Node> n, int t, int b, bool s, double r, double sin);
+    Clients_Models(Ptr<Node> n, int t, int b, bool s, double r, double sin, double acc);
 
     // Constructor without selected, rsrp, and sinr
-    Clients_Models(Ptr<Node> n, int t, int b, double r, double sin);
+    Clients_Models(Ptr<Node> n, int t, int b, double r, double sin, double acc);
 
     // Explicitly delete the default constructor
     // Clients_Models() = delete;
