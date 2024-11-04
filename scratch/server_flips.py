@@ -35,31 +35,36 @@ def get_layer_importance(json_info, layer_name):
     for layer in json_info:
         if layer[1] == layer_name:
             return layer[2]
+import numpy as np
 
-
-def fedavg(models, selected_clients_json_info):
-
+def fedavg_flips(models, selected_clients_json_info):
     avg_weights = []
 
+    # Iterate over all layers in the model
     for layer_index in range(len(models[0].layers)):
-
         layer_weights = []
+        layer_name = models[0].layers[layer_index].name
 
+        # Collect weights only from the 3 most important layers of each client
         for client_index, model in enumerate(models):
+            client_info = selected_clients_json_info[client_index]
+            layer_importances = client_info["layer_importances"]
 
-            layer_weight = model.layers[layer_index].get_weights()
-            layer_name = models[0].layers[layer_index].name
-            layer_importance = get_layer_importance(
-                selected_clients_json_info[client_index]["layer_importances"], layer_name
-            )
+            # Sort layers by importance and get the top 3 important layers
+            important_layers = sorted(layer_importances, key=lambda x: x[1], reverse=True)[:3]
+            important_layer_names = [layer[0] for layer in important_layers]
 
-            if selected_clients_json_info[client_index]["layer_importances"][1] == layer_name:
-                print(layer_name)
+            # Print the important layers for the current client
+            if layer_index == 0:  # Print once per client, for the first layer index
+                print(f"Client {client_index + 1}: Using top 3 important layers: {important_layer_names}")
 
-            layer_weights.append(layer_weight)
+            # If the current layer is one of the 3 most important for the client, add its weights
+            if layer_name in important_layer_names:
+                layer_weight = model.layers[layer_index].get_weights()
+                layer_weights.append(layer_weight)
 
-        if layer_weights[0]:
-
+        # If the current layer is among the important ones for any client, average the weights
+        if layer_weights:
             averaged_layer_weights = []
             for weights_set in zip(*layer_weights):
                 weights_stack = np.stack(weights_set, axis=0)
@@ -68,10 +73,11 @@ def fedavg(models, selected_clients_json_info):
 
             avg_weights.append(averaged_layer_weights)
         else:
-
-            avg_weights.append([])
+            # If this layer is not important, keep the original weights from the first model
+            avg_weights.append(models[0].layers[layer_index].get_weights())
 
     return avg_weights
+
 
 
 def quantize_weights(weights, quantization_levels):
@@ -157,7 +163,7 @@ def main():
     with open(clients_file, "r") as f:
         successful_clients = json.load(f)["successful_clients"]
 
-    client_metadata = [json.load(open(client.replace(".keras", "_model_sizes.json"))) for client in successful_clients]
+    client_metadata = [json.load(open(client.replace(".keras", ".json"))) for client in successful_clients]
 
     # Load models and validation data
     models = load_models_from_selected_clients(model_dir, successful_clients)
@@ -167,7 +173,7 @@ def main():
     validation_data = load_validation_data()
 
     # Perform FedAvg, quantize, and compress weights
-    avg_weights = fedavg(models, client_metadata)
+    avg_weights = fedavg_flips(models, client_metadata)
     quantized_weights = quantize_weights(avg_weights, quantization_factor)
     compressed_weights = compress_weights(quantized_weights)
 

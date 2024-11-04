@@ -14,6 +14,7 @@ def parse_log_file(filename):
     """
     timestamps = []
     rx_throughput = []
+    tx_throughput = []
     accuracy_data = {}
     server_validation_acc = []
     client_participation = []
@@ -21,6 +22,7 @@ def parse_log_file(filename):
     
     # Regular expressions for parsing different log entries
     rx_throughput_pattern = re.compile(r'(\d+(?:\.\d+)?)s: Instant Network Throughput: (\d+(?:\.\d+)?) Mbps')
+    tx_throughput_pattern = re.compile(r'(\d+(?:\.\d+)?)s: Instant Tx Throughput: (\d+(?:\.\d+)?) Mbps')
     client_accuracy_pattern = re.compile(r'Client (\d+) info.+?"(accuracy)":(\d\.\d+),.*?"(val_accuracy)":(\d.\d+)')
     round_end_pattern = re.compile(r'(\d+)\sseconds, round number\s+(\d+)\s+.*"Validation Accuracy":(\d+\.\d+).*"Validation Loss":(\d+\.\d+)')
     round_start_pattern = re.compile(r'Starting round (\d+) at (\d+) seconds')
@@ -34,6 +36,13 @@ def parse_log_file(filename):
                 throughput = float(match_throughput.group(2))
                 timestamps.append(timestamp)
                 rx_throughput.append(throughput)
+
+            match_tx_throughput = tx_throughput_pattern.search(line)
+            if match_tx_throughput:
+                timestamp = float(match_tx_throughput.group(1))
+                throughput = float(match_tx_throughput.group(2))
+                # timestamps.append(timestamp)
+                tx_throughput.append(throughput)
             
             # Match client accuracy data
             match_accuracy = client_accuracy_pattern.search(line)
@@ -68,7 +77,7 @@ def parse_log_file(filename):
         file.seek(0)
         lines = file.readlines()
         # print("".join(lines))
-        round_participation_pattern = re.compile(r'able to send (\d)\/(\d)\n.*\n.*\n(\d+) seconds, round number  (\d)')
+        round_participation_pattern = re.compile(r'able to send!? (\d)\/(\d)\n.*\n(\d+).*round number\s{1,}(\d+)')
         # match_participation = 
         # print(match_participation)
         # if match_participation:
@@ -79,12 +88,12 @@ def parse_log_file(filename):
                 clients_participated = int(m.group(1))
                 total_clients = int(m.group(2))
                 print(timestamp, clients_participated)
-                participation_ratio = clients_participated / total_clients
+                participation_ratio = clients_participated
                 client_participation.append((timestamp, participation_ratio))
 
 
     
-    return timestamps, rx_throughput, accuracy_data, server_validation_acc, client_participation, round_markers
+    return timestamps, rx_throughput, tx_throughput, accuracy_data, server_validation_acc, client_participation, round_markers
 
 def plot_throughput(timestamps, rx_throughput, output_filename):
     """
@@ -160,41 +169,61 @@ def plot_average_accuracy(accuracy_data, output_filename):
     plt.legend()
     plt.savefig(output_filename)
     plt.close()
+import matplotlib.pyplot as plt
 
-def plot_server_accuracy(server_validation_acc, client_participation, round_markers, output_filename):
+def plot_server_accuracy_and_participation(server_validation_acc, client_participation, round_markers, output_filename_acc, output_filename_part):
     """
-    Plot the server validation accuracy and client participation over time, with round markers.
-    
+    Plot the server validation accuracy and client participation over time as two separate plots, with round markers.
+
     :param server_validation_acc: List of tuples (timestamp, validation accuracy)
     :param client_participation: List of tuples (timestamp, participation ratio)
     :param round_markers: List of tuples (timestamp, 'start' or 'end')
-    :param output_filename: Filename to save the plot
+    :param output_filename_acc: Filename to save the validation accuracy plot
+    :param output_filename_part: Filename to save the client participation plot
     """
-    timestamps, val_accs = zip(*server_validation_acc)
+    # Unpack data for server validation accuracy and client participation
+    timestamps_acc, val_accs = zip(*server_validation_acc)
     timestamps_part, participation_ratios = zip(*client_participation)
 
+    # First Plot: Server Validation Accuracy
     plt.figure(figsize=(10, 6))
-
-    # Plot validation accuracy
-    plt.plot(timestamps, val_accs, label='Validation Accuracy (Server)', marker='o')
-
-    # Plot client participation
-    plt.plot(timestamps_part, participation_ratios, label='Client Participation', marker='x')
-
+    plt.plot(timestamps_acc, val_accs, label='Validation Accuracy (Server)', marker='o')
+    
     # Add round markers
     for timestamp, marker_type in round_markers:
         if marker_type == 'start':
             plt.axvline(x=timestamp, color='green', linestyle='--', label='Round Start' if timestamp == round_markers[0][0] else "")
         elif marker_type == 'end':
             plt.axvline(x=timestamp, color='red', linestyle='--', label='Round End' if timestamp == round_markers[0][0] else "")
-
+    
     plt.xlabel('Time (seconds)')
-    plt.ylabel('Accuracy / Participation')
-    plt.title('Server Validation Accuracy and Client Participation Over Time')
+    plt.ylabel('Validation Accuracy')
+    plt.title('Server Validation Accuracy Over Time')
     plt.grid(True)
     plt.legend()
-    plt.savefig(output_filename)
+    plt.savefig(output_filename_acc)
     plt.close()
+
+    # Second Plot: Client Participation
+    plt.figure(figsize=(10, 6))
+    plt.plot(timestamps_part, participation_ratios, label='Client Participation', marker='x')
+    
+    # Add round markers
+    for timestamp, marker_type in round_markers:
+        if marker_type == 'start':
+            plt.axvline(x=timestamp, color='green', linestyle='--', label='Round Start' if timestamp == round_markers[0][0] else "")
+        elif marker_type == 'end':
+            plt.axvline(x=timestamp, color='red', linestyle='--', label='Round End' if timestamp == round_markers[0][0] else "")
+    
+    plt.xlabel('Time (seconds)')
+    plt.ylabel('Participation Ratio')
+    plt.title('Client Participation Over Time')
+    plt.grid(True)
+    plt.legend()
+    plt.savefig(output_filename_part)
+    plt.close()
+
+
 
 if __name__ == "__main__":
     if len(sys.argv) != 2:
@@ -204,7 +233,9 @@ if __name__ == "__main__":
     log_file = sys.argv[1]
     
     # Parse the log file
-    timestamps, rx_throughput, accuracy_data, server_validation_acc, client_participation, round_markers = parse_log_file(log_file)
+    timestamps, rx_throughput, tx_throughput, accuracy_data, server_validation_acc, client_participation, round_markers = parse_log_file(log_file)
+    print(f"{server_validation_acc=}")
+    print(f"{client_participation=}")
     
     # Check if any RX throughput data was found
     if not timestamps or not rx_throughput:
@@ -213,6 +244,7 @@ if __name__ == "__main__":
     
     # Plot the throughput data and save the plot
     plot_throughput(timestamps, rx_throughput, 'network_rx_throughput.png')
+    plot_throughput(timestamps, tx_throughput, 'network_tx_throughput.png')
     
     # Plot client accuracy over time and save the plot
     if accuracy_data:
@@ -223,6 +255,6 @@ if __name__ == "__main__":
     
     # Plot server validation accuracy and client participation over time with round markers
     if server_validation_acc and client_participation:
-        plot_server_accuracy(server_validation_acc, client_participation, round_markers, 'server_validation_accuracy.png')
+        plot_server_accuracy_and_participation(server_validation_acc, client_participation, round_markers, 'server_validation_accuracy.png', 'client_participation.png')
     else:
         print("No server accuracy or client participation data found in the log file.")

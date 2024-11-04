@@ -50,11 +50,12 @@ using json = nlohmann::json;
 NS_LOG_COMPONENT_DEFINE("Simulation");
 
 // Global constants
-static constexpr double simStopTime = 100.0;
-static constexpr int numberOfUes = 4;
+static constexpr double simStopTime = 300.0;
+static constexpr int numberOfUes = 8;
 static constexpr int numberOfEnbs = 10;
-static constexpr int numberOfParticipatingClients = numberOfUes / 2;
+static constexpr int numberOfParticipatingClients = numberOfUes;
 static constexpr int scenarioSize = 1000;
+std::string algorithm = "fedavg";
 
 // Global variables for simulation objects
 NodeContainer ueNodes;
@@ -88,7 +89,7 @@ std::vector<Clients_Models> clients_info;
 std::vector<Clients_Models> selected_clients;
 
 // Timeout for certain operations
-Time timeout = Seconds(50);
+Time timeout = Seconds(90);
 
 std::pair<double, double> get_rsrp_sinr(uint32_t nodeIdx)
 {
@@ -176,10 +177,13 @@ std::vector<Clients_Models> train_clients()
             // Parse the JSON file for training duration
             {
                 std::stringstream json_filename;
-                json_filename << "models/" << ueNodes.Get(i) << "_model_sizes.json";
+                json_filename << "models/" << ueNodes.Get(i) << ".json";
                 json j = parse_json_file(json_filename.str());
                 int nodeTrainingTime = j["duration"];
                 double accuracy = j["accuracy"];
+                if (algorithm == "flips") {
+                    bytes = j["compressed_size"];
+                }
                 LOG("\nClient " << i << " finished training after " << nodeTrainingTime
                     << " milliseconds");
                 LOG(Simulator::Now().GetSeconds() << " seconds : Client " << i << " info: " << j);
@@ -209,7 +213,7 @@ void get_clients_info()
     for (uint32_t i = 0; i < ueNodes.GetN(); i++) {
         auto [rsrp, sinr] = get_rsrp_sinr(i);
         std::stringstream json_filename;
-        json_filename << "models/" << ueNodes.Get(i) << "_model_sizes.json";
+        json_filename << "models/" << ueNodes.Get(i) << ".json";
         json j = parse_json_file(json_filename.str());
         j["rsrp"] = rsrp;
         j["sinr"] = sinr;
@@ -324,7 +328,12 @@ void log_server_evaluation()
 
 void aggregation()
 {
-    runScriptAndMeasureTime("scratch/server.py");
+    if (algorithm == "flips") {
+        runScriptAndMeasureTime("scratch/server_flips.py");
+    }
+    else {
+        runScriptAndMeasureTime("scratch/server.py");
+    }
     log_server_evaluation();
 }
 
@@ -456,7 +465,7 @@ int main(int argc, char *argv[])
     mmwaveHelper->SetHandoverAlgorithmType("ns3::A2A4RsrqHandoverAlgorithm");
     mmwaveHelper->SetHandoverAlgorithmAttribute("ServingCellThreshold", UintegerValue(30));
     mmwaveHelper->SetHandoverAlgorithmAttribute("NeighbourCellOffset", UintegerValue(1));
-    mmwaveHelper->SetAttribute("PathlossModel", StringValue("ns3::Cost231PropagationLossModel"));
+    // mmwaveHelper->SetAttribute("PathlossModel", StringValue("ns3::Cost231PropagationLossModel"));
 
     ConfigStore inputConfig;
     inputConfig.ConfigureDefaults();

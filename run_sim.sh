@@ -30,6 +30,7 @@ rm -f selected*
 rm -f *.json
 rm -f client_exec.txt
 rm -f .txt
+rm -f *.png
 rm -f metrics.txt
 rm -f simulation_output.txt
 
@@ -56,5 +57,7 @@ kill -9 $client_pid 2>/dev/null || true
 
 # Wait for client to finish
 wait $client_pid 2>/dev/null || true
+
+python plot_results.py
 
 echo "Processes stopped."
