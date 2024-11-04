@@ -18,8 +18,8 @@ using namespace ns3;
 
 struct Clients_Models {
     Ptr<Node> node;
-    int training_time;
-    int node_to_bytes;
+    int nodeTrainingTime;
+    int nodeModelSize;
     bool selected;
     double rsrp;
     double sinr;

@@ -19,7 +19,9 @@ models
 *h5
 *class
 old_files
-BonnMotion/bin/*
+BonnMotion/bin/
+BonnMotion/classes/
+*~
 *.png
 
 *.o

@@ -50,11 +50,11 @@ using json = nlohmann::json;
 NS_LOG_COMPONENT_DEFINE("Simulation");
 
 // Global constants
-static constexpr double simStopTime = 500.0;
-static constexpr int number_of_ues = 4;
-static constexpr int number_of_enbs = 10;
-static constexpr int n_participating_clients = number_of_ues / 2;
-static constexpr int scenario_size = 1000;
+static constexpr double simStopTime = 100.0;
+static constexpr int numberOfUes = 4;
+static constexpr int numberOfEnbs = 10;
+static constexpr int numberOfParticipatingClients = numberOfUes / 2;
+static constexpr int scenarioSize = 1000;
 
 // Global variables for simulation objects
 NodeContainer ueNodes;
@@ -67,36 +67,36 @@ Ipv4Address remoteHostAddr;
 // Random number generation setup
 std::random_device dev;
 std::mt19937 rng(dev());
-std::uniform_int_distribution<std::mt19937::result_type> dist(0, scenario_size);
+std::uniform_int_distribution<std::mt19937::result_type> dist(0, scenarioSize);
 
 // Flow monitoring helper
 FlowMonitorHelper flowmon;
 
 // Data structure for tracking various metrics
 std::map<Ipv4Address, double> endOfStreamTimes;
-std::map<Ptr<Node>, int> node_to_bytes, training_time;
-std::map<uint16_t, std::map<uint16_t, double>> sinr_ue;
-std::map<uint16_t, std::map<uint16_t, double>> rsrp_ue;
+std::map<Ptr<Node>, int> nodeModelSize, nodeTrainingTime;
+std::map<uint16_t, std::map<uint16_t, double>> sinrUe;
+std::map<uint16_t, std::map<uint16_t, double>> rsrpUe;
 
 // Global state variables
-static bool round_finished = true;
-static int round_number = 0;
+static bool roundFinished = true;
+static int roundNumber = 0;
 
 // Client-related information
-std::vector<NodesIps> nodes_ips;
+std::vector<NodesIps> nodesIPs;
 std::vector<Clients_Models> clients_info;
 std::vector<Clients_Models> selected_clients;
 
 // Timeout for certain operations
-Time timeout = Seconds(100);
+Time timeout = Seconds(50);
 
 std::pair<double, double> get_rsrp_sinr(uint32_t nodeIdx)
 {
     Ptr<NetDevice> ueDevice = ueDevs.Get(nodeIdx);
     auto rnti = ueDevice->GetObject<LteUeNetDevice>()->GetRrc()->GetRnti();
     auto cellId = ueDevice->GetObject<LteUeNetDevice>()->GetRrc()->GetCellId();
-    double rsrp = rsrp_ue[cellId][rnti];
-    double sinr = sinr_ue[cellId][rnti];
+    double rsrp = rsrpUe[cellId][rnti];
+    double sinr = sinrUe[cellId][rnti];
     return {rsrp, sinr};
 }
 
@@ -125,17 +125,18 @@ std::vector<Clients_Models> train_clients()
 {
     std::vector<Clients_Models> clients_info;
     LOG("=================== " << Simulator::Now().GetSeconds() << " seconds.");
+    // bool dummy = true;
     bool dummy = false;
     // Helper function to get RSRP and SINR values
 
     if (dummy) {
-        const int training_time = 5000; // Constant training time of 5 seconds for dummy mode
+        const int nodeTrainingTime = 5000; // Constant training time of 5 seconds for dummy mode
         const int bytes = 22910076;     // Constant bytes for dummy mode, this is the actual uncompressed model size
 
         for (uint32_t i = 0; i < ueNodes.GetN(); ++i) {
             auto [rsrp, sinr] = get_rsrp_sinr(i);
             double dummy_acc = 0.8;
-            clients_info.emplace_back(ueNodes.Get(i), training_time, bytes, rsrp, sinr, dummy_acc);
+            clients_info.emplace_back(ueNodes.Get(i), nodeTrainingTime, bytes, rsrp, sinr, dummy_acc);
         }
 
         return clients_info;
@@ -177,13 +178,13 @@ std::vector<Clients_Models> train_clients()
                 std::stringstream json_filename;
                 json_filename << "models/" << ueNodes.Get(i) << "_model_sizes.json";
                 json j = parse_json_file(json_filename.str());
-                int training_time = j["duration"];
+                int nodeTrainingTime = j["duration"];
                 double accuracy = j["accuracy"];
-                LOG("\nClient " << i << " finished training after " << training_time
+                LOG("\nClient " << i << " finished training after " << nodeTrainingTime
                     << " milliseconds");
                 LOG(Simulator::Now().GetSeconds() << " seconds : Client " << i << " info: " << j);
                 // Store the client information
-                clients_info.emplace_back(ueNodes.Get(i), training_time, bytes, rsrp, sinr, accuracy);
+                clients_info.emplace_back(ueNodes.Get(i), nodeTrainingTime, bytes, rsrp, sinr, accuracy);
             }
 
             {
@@ -317,7 +318,7 @@ void log_server_evaluation()
     if (j.is_null()) {
         LOG("Error: No valid data found in the JSON file.");
     } else {
-        LOG(Simulator::Now().GetSeconds() << " seconds, round number  " << round_number << " " << j); // Log the JSON content if parsing was successful
+        LOG(Simulator::Now().GetSeconds() << " seconds, round number  " << roundNumber << " " << j); // Log the JSON content if parsing was successful
     }
 }
 
@@ -332,11 +333,11 @@ void send_models_to_server(std::vector<Clients_Models> clients)
     for (auto i : clients) {
         if (i.selected) {
             LOG("Client " << i << " scheduling send model.");
-            Simulator::Schedule(MilliSeconds(i.training_time),
+            Simulator::Schedule(MilliSeconds(i.nodeTrainingTime),
                                 &sendStream,
                                 i.node,
                                 remoteHostContainer.Get(0),
-                                i.node_to_bytes);
+                                i.nodeModelSize);
         }
     }
 }
@@ -369,31 +370,31 @@ void manager()
     static Time round_start;
 
     if (Simulator::Now() - round_start > timeout) {
-        round_finished = true;
+        roundFinished = true;
         LOG("Round timed out, not all clients were able to send " << endOfStreamTimes.size() << "/"
-            << n_participating_clients);
+            << numberOfParticipatingClients);
     }
 
-    nodes_ips = node_to_ips();
+    nodesIPs = node_to_ips();
 
-    if (round_finished) {
-        if (round_number != 0) {
+    if (roundFinished) {
+        if (roundNumber != 0) {
             LOG("Round finished at " << Simulator::Now().GetSeconds()
                 << ", all clients were able to send! "
-                << endOfStreamTimes.size() << "/" << n_participating_clients);
+                << endOfStreamTimes.size() << "/" << numberOfParticipatingClients);
             write_successful_clients();
             aggregation();
         }
 
         round_cleanup();
         round_start = Simulator::Now();
-        round_number++;
-        round_finished = false;
-        LOG("Starting round " << round_number << " at " << Simulator::Now().GetSeconds()
+        roundNumber++;
+        roundFinished = false;
+        LOG("Starting round " << roundNumber << " at " << Simulator::Now().GetSeconds()
             << " seconds.");
         clients_info = train_clients();
-        // selected_clients = client_selection(n_participating_clients, clients_info);
-        selected_clients = client_selection_sinr(n_participating_clients, clients_info);
+        // selected_clients = client_selection(numberOfParticipatingClients, clients_info);
+        selected_clients = client_selection_sinr(numberOfParticipatingClients, clients_info);
 
         // get_clients_info();
         // getchar();
@@ -401,38 +402,12 @@ void manager()
         send_models_to_server(selected_clients);
     }
 
-    round_finished = finished_transmission(nodes_ips, selected_clients);
+    roundFinished = finished_transmission(nodesIPs, selected_clients);
     Simulator::Schedule(Seconds(1), &manager);
 }
 
-// void
-// read_json()
-// {
-//     // Helper function to parse JSON file
-//     auto parse_json_file = [](const std::string& filepath) -> json {
-//         std::ifstream ifs(filepath);
-//         json j;
-//         ifs >> j;
-//         return j;
-//     };
 
-//     std::string json_file = "models/0x559d3f606780_model_sizes.json";
-
-//     json j = parse_json_file(json_file);
-//     auto l = j["layer_importances"];
-
-//     for (auto i : l) {
-//         LOG(i);
-//         i.at(0);
-//         int index = i.at(0);
-//         std::string layer_name = i.at(1);
-//         double acc_drop = i.at(2);
-//     }
-// }
-
-// Main function
-int main(int argc, char *argv[])
-{
+void ConfigureDefaults() {
     Config::SetDefault("ns3::LteRlcUm::MaxTxBufferSize", UintegerValue(10 * 1024 * 1024 * 10));
     Config::SetDefault("ns3::LteRlcAm::MaxTxBufferSize", UintegerValue(10 * 1024 * 1024));
     Config::SetDefault("ns3::LteRlcUmLowLat::MaxTxBufferSize", UintegerValue(10 * 1024 * 1024));
@@ -453,7 +428,7 @@ int main(int argc, char *argv[])
     Config::SetDefault("ns3::LteUePowerControl::AccumulationEnabled", BooleanValue(false));
     // Config::SetDefault("ns3::LteEnbPhy::TxPower", DoubleValue(43.0));
     // lower the ue tx power for more challenging transmission
-    Config::SetDefault("ns3::LteUePhy::TxPower", DoubleValue(5.0));
+    // Config::SetDefault("ns3::LteUePhy::TxPower", DoubleValue(5.0));
 
     // Config::SetDefault("ns3::PhasedArrayModel::AntennaElement",
     //                    PointerValue(CreateObject<IsotropicAntennaModel>()));
@@ -463,33 +438,30 @@ int main(int argc, char *argv[])
     // Config::SetDefault("ns3::ComponentCarrier::UlBandwidth", UintegerValue(15));
     // Config::SetDefault("ns3::ComponentCarrier::DlBandwidth", UintegerValue(15));
 
+}
+
+// Main function
+int main(int argc, char *argv[])
+{
+    ConfigureDefaults();
+
     CommandLine cmd;
     cmd.Parse(argc, argv);
 
-    // Ptr<MmWaveHelper> mmwaveHelper = CreateObject<MmWaveHelper>();
-    // mmwaveHelper->SetSchedulerType("ns3::MmWaveFlexTtiMacScheduler");
-    // Ptr<MmWavePointToPointEpcHelper> epcHelper =
-    // CreateObject<MmWavePointToPointEpcHelper>();
-    // mmwaveHelper->SetEpcHelper(epcHelper);
-    // Config::SetDefault("ns3::LteEnbRrc::SecondaryCellHandoverMode",
-    //                        EnumValue(LteEnbRrc::THRESHOLD));
-
+    // set up helpers
     Ptr<LteHelper> mmwaveHelper = CreateObject<LteHelper>();
     Ptr<PointToPointEpcHelper> epcHelper = CreateObject<PointToPointEpcHelper>();
     mmwaveHelper->SetEpcHelper(epcHelper);
     mmwaveHelper->SetSchedulerType("ns3::RrFfMacScheduler");
-
-    // mmwaveHelper->SetHandoverAlgorithmType("ns3::A3RsrpHandoverAlgorithm");
-    // mmwaveHelper->SetHandoverAlgorithmAttribute("Hysteresis", DoubleValue(3));
-    // mmwaveHelper->SetHandoverAlgorithmAttribute("TimeToTrigger", TimeValue(MilliSeconds(256)));
-
     mmwaveHelper->SetHandoverAlgorithmType("ns3::A2A4RsrqHandoverAlgorithm");
     mmwaveHelper->SetHandoverAlgorithmAttribute("ServingCellThreshold", UintegerValue(30));
     mmwaveHelper->SetHandoverAlgorithmAttribute("NeighbourCellOffset", UintegerValue(1));
-    // mmwaveHelper->SetAttribute("PathlossModel", StringValue("ns3::Cost231PropagationLossModel"));
+    mmwaveHelper->SetAttribute("PathlossModel", StringValue("ns3::Cost231PropagationLossModel"));
 
     ConfigStore inputConfig;
     inputConfig.ConfigureDefaults();
+
+    // set up remote host
     Ptr<Node> pgw = epcHelper->GetPgwNode();
     remoteHostContainer.Create(1);
     Ptr<Node> remoteHost = remoteHostContainer.Get(0);
@@ -512,8 +484,8 @@ int main(int argc, char *argv[])
         ipv4RoutingHelper.GetStaticRouting(remoteHost->GetObject<Ipv4>());
     remoteHostStaticRouting->AddNetworkRouteTo(Ipv4Address("7.0.0.0"), Ipv4Mask("255.0.0.0"), 1);
 
-    enbNodes.Create(number_of_enbs);
-    ueNodes.Create(number_of_ues);
+    enbNodes.Create(numberOfEnbs);
+    ueNodes.Create(numberOfUes);
 
     MobilityHelper enbmobility;
     Ptr<ListPositionAllocator> enbPositionAlloc = CreateObject<ListPositionAllocator>();
@@ -565,23 +537,26 @@ int main(int argc, char *argv[])
     }
 
     Ptr<FlowMonitor> monitor = flowmon.InstallAll();
+
     Simulator::Schedule(Seconds(1), &manager);
     Simulator::Schedule(Seconds(1), &network_info, monitor);
-    // AnimationInterface anim("mmwave-animation.xml");
-    // for (uint32_t i = 0; i < ueNodes.GetN(); ++i)
-    // {
-    //     anim.UpdateNodeDescription(ueNodes.Get(i), "UE");
-    //     anim.UpdateNodeColor(ueNodes.Get(i), 255, 0, 0);
-    // }
-    // for (uint32_t i = 0; i < enbNodes.GetN(); ++i)
-    // {
-    //     anim.UpdateNodeDescription(enbNodes.Get(i), "ENB");
-    //     anim.UpdateNodeColor(enbNodes.Get(i), 0, 255, 0);
-    // }
-    // anim.UpdateNodeDescription(remoteHost, "RH");
-    // anim.UpdateNodeColor(remoteHost, 0, 0, 255);
-    // anim.UpdateNodeDescription(pgw, "pgw");
-    // anim.UpdateNodeColor(pgw, 0, 0, 255);
+
+    AnimationInterface anim("mmwave-animation.xml");
+    for (uint32_t i = 0; i < ueNodes.GetN(); ++i)
+    {
+        anim.UpdateNodeDescription(ueNodes.Get(i), "UE");
+        anim.UpdateNodeColor(ueNodes.Get(i), 255, 0, 0);
+    }
+    for (uint32_t i = 0; i < enbNodes.GetN(); ++i)
+    {
+        anim.UpdateNodeDescription(enbNodes.Get(i), "ENB");
+        anim.UpdateNodeColor(enbNodes.Get(i), 0, 255, 0);
+    }
+    anim.UpdateNodeDescription(remoteHost, "RH");
+    anim.UpdateNodeColor(remoteHost, 0, 0, 255);
+    anim.UpdateNodeDescription(pgw, "pgw");
+    anim.UpdateNodeColor(pgw, 0, 0, 255);
+
     Config::Connect("/NodeList/*/DeviceList/*/LteEnbRrc/ConnectionEstablished",
                     MakeCallback(&NotifyConnectionEstablishedEnb));
     Config::Connect("/NodeList/*/DeviceList/*/LteUeRrc/ConnectionEstablished",

@@ -43,8 +43,8 @@ void ReportUeSinrRsrp(uint16_t cellId,
     //   std::cout << "CellId: " << cellId << ", RNTI: " << rnti
     //             << ", RSRP: " << rsrp << " dBm, SINR: " << sinr << " dB "  << " cc Id: " <<
     //             componentCarrierId << std::endl;
-    sinr_ue[cellId][rnti] = sinr;
-    rsrp_ue[cellId][rnti] = rsrp;
+    sinrUe[cellId][rnti] = sinr;
+    rsrpUe[cellId][rnti] = rsrp;
 }
 
 

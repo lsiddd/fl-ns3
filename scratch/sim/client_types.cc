@@ -3,8 +3,8 @@
 // Implementation of Clients_Models constructors
 Clients_Models::Clients_Models(Ptr<Node> n, int t, int b, bool s, double r, double sin, double acc)
     : node(n),
-      training_time(t),
-      node_to_bytes(b),
+      nodeTrainingTime(t),
+      nodeModelSize(b),
       selected(s),
       rsrp(r),
       sinr(sin),
@@ -14,8 +14,8 @@ Clients_Models::Clients_Models(Ptr<Node> n, int t, int b, bool s, double r, doub
 
 Clients_Models::Clients_Models(Ptr<Node> n, int t, int b, double r, double sin, double acc)
     : node(n),
-      training_time(t),
-      node_to_bytes(b),
+      nodeTrainingTime(t),
+      nodeModelSize(b),
       selected(false),
       rsrp(r),
       sinr(sin),
@@ -27,7 +27,7 @@ Clients_Models::Clients_Models(Ptr<Node> n, int t, int b, double r, double sin, 
 std::ostream& operator<<(std::ostream& os, const Clients_Models& model)
 {
     os << "Clients_Models { id: " << model.node->GetId()
-       << ", training_time: " << model.training_time << ", node_to_bytes: " << model.node_to_bytes
+       << ", training_time: " << model.nodeTrainingTime << ", node_to_bytes: " << model.nodeModelSize
        << ", selected: " << (model.selected ? "true" : "false") << ", RSRP: " << model.rsrp
        << " dBm, SINR: " << model.sinr << " dB }";
     return os;

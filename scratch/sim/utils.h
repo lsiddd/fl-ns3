@@ -24,8 +24,8 @@ using namespace ns3;
 extern std::map<Ipv4Address, double> endOfStreamTimes;
 extern NodeContainer ueNodes;
 extern NodeContainer remoteHostContainer;
-extern std::map<uint16_t, std::map<uint16_t, double>> sinr_ue;
-extern std::map<uint16_t, std::map<uint16_t, double>> rsrp_ue;
+extern std::map<uint16_t, std::map<uint16_t, double>> sinrUe;
+extern std::map<uint16_t, std::map<uint16_t, double>> rsrpUe;
 extern FlowMonitorHelper flowmon;
 
 // Function declarations
