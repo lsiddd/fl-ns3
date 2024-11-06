@@ -157,7 +157,7 @@ def main():
     with open(clients_file, "r") as f:
         successful_clients = json.load(f)["successful_clients"]
 
-    client_metadata = [json.load(open(client.replace(".keras", "_model_sizes.json"))) for client in successful_clients]
+    client_metadata = [json.load(open(client.replace(".keras", ".json"))) for client in successful_clients]
 
     # Load models and validation data
     models = load_models_from_selected_clients(model_dir, successful_clients)

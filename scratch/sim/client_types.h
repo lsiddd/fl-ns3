@@ -16,7 +16,7 @@
 
 using namespace ns3;
 
-struct Clients_Models {
+struct ClientModels {
     Ptr<Node> node;
     int nodeTrainingTime;
     int nodeModelSize;
@@ -26,20 +26,20 @@ struct Clients_Models {
     double accuracy;
 
     // Constructor with all parameters
-    Clients_Models(Ptr<Node> n, int t, int b, bool s, double r, double sin, double acc);
+    ClientModels(Ptr<Node> n, int t, int b, bool s, double r, double sin, double acc);
 
     // Constructor without selected, rsrp, and sinr
-    Clients_Models(Ptr<Node> n, int t, int b, double r, double sin, double acc);
+    ClientModels(Ptr<Node> n, int t, int b, double r, double sin, double acc);
 
     // Explicitly delete the default constructor
     // Clients_Models() = delete;
 };
 
 // Overload the '<<' operator for Clients_Models to display RSRP and SINR
-std::ostream& operator<<(std::ostream& os, const Clients_Models& model);
+std::ostream& operator<<(std::ostream& os, const ClientModels& model);
 
 struct NodesIps {
-    uint32_t node_id;
+    uint32_t nodeId;
     uint32_t index;
     Ipv4Address ip;
 

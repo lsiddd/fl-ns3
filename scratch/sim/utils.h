@@ -3,6 +3,8 @@
 
 // Include necessary libraries and modules
 #include "client_types.h"
+#include "dataframe.h"
+
 #include "ns3/applications-module.h"
 #include "ns3/command-line.h"
 #include "ns3/config-store-module.h"
@@ -28,13 +30,15 @@ extern std::map<uint16_t, std::map<uint16_t, double>> sinrUe;
 extern std::map<uint16_t, std::map<uint16_t, double>> rsrpUe;
 extern FlowMonitorHelper flowmon;
 
+extern DataFrame throughput_df;
+
 // Function declarations
 
 // Utility function to extract RNTI and CellId from UE node
-std::pair<uint16_t, uint16_t> get_ue_rnti_cellid(Ptr<ns3::NetDevice> ueNode);
+std::pair<uint16_t, uint16_t> getUeRntiCellid(Ptr<ns3::NetDevice> ueNode);
 
 // Function to map nodes to IPs
-std::vector<NodesIps> node_to_ips();
+std::vector<NodesIps> nodeToIps();
 
 // Report SINR and RSRP for a UE
 void ReportUeSinrRsrp(uint16_t cellId,
@@ -59,13 +63,13 @@ std::string extractModelPath(const std::string& input);
 std::streamsize getFileSize(const std::string& filename);
 
 // Check if transmission has finished for given nodes and clients
-bool finished_transmission(std::vector<NodesIps> nodes_ips,
-                           std::vector<Clients_Models>& clients_info);
+bool checkFinishedTransmission(std::vector<NodesIps> nodes_ips,
+                           std::vector<ClientModels>& clients_info);
 
 // Output network statistics based on the flow monitor
-void network_info(Ptr<FlowMonitor> monitor);
+void networkInfo(Ptr<FlowMonitor> monitor);
 
 // Clean up resources after a simulation round
-void round_cleanup();
+void roundCleanup();
 
 #endif // SIM_UTILS_H

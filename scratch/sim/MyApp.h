@@ -17,7 +17,7 @@ public:
     virtual ~MyApp() override;
 
     void Setup(Ptr<Socket> socket, Address address, uint32_t packetSize,
-               uint32_t nPackets, DataRate dataRate, uint32_t writeSize, uint8_t* data, uint8_t* data_fin);
+               uint32_t nPackets, DataRate dataRate, uint32_t writeSize, uint8_t* data, uint8_t* dataFin);
     virtual void StopApplication() override;
 
 private:

@@ -8,7 +8,7 @@ NS_LOG_COMPONENT_DEFINE("MyApp");
 
 // static const uint32_t writeSize = 2500;
 // uint8_t data[writeSize] = {'g'};
-// uint8_t data_fin[writeSize] = {'b'};
+// uint8_t dataFin[writeSize] = {'b'};
 
 MyApp::MyApp() = default;
 
@@ -18,7 +18,7 @@ MyApp::~MyApp()
 }
 
 void MyApp::Setup(Ptr<Socket> socket, Address address, uint32_t packetSize,
-                  uint32_t nPackets, DataRate dataRate, uint32_t writeSize, uint8_t* data, uint8_t* data_fin)
+                  uint32_t nPackets, DataRate dataRate, uint32_t writeSize, uint8_t* data, uint8_t* dataFin)
 {
     m_socket = socket;
     m_peer = address;
@@ -27,7 +27,7 @@ void MyApp::Setup(Ptr<Socket> socket, Address address, uint32_t packetSize,
     m_dataRate = dataRate;
     m_startTime = Simulator::Now();
     m_data = data;
-    m_data_fin = data_fin;
+    m_data_fin = dataFin;
     m_writeSize = writeSize;
 }
 

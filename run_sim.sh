@@ -31,8 +31,11 @@ rm -f *.json
 rm -f client_exec.txt
 rm -f .txt
 rm -f *.png
+rm -f *csv
 rm -f metrics.txt
 rm -f simulation_output.txt
+
+mkdir -p models
 
 # Run the Python client in the background and capture its PID
 nohup python scratch/client.py > client_exec.txt 2>&1 &

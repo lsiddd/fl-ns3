@@ -1,7 +1,7 @@
 #include "client_types.h"
 
 // Implementation of Clients_Models constructors
-Clients_Models::Clients_Models(Ptr<Node> n, int t, int b, bool s, double r, double sin, double acc)
+ClientModels::ClientModels(Ptr<Node> n, int t, int b, bool s, double r, double sin, double acc)
     : node(n),
       nodeTrainingTime(t),
       nodeModelSize(b),
@@ -12,7 +12,7 @@ Clients_Models::Clients_Models(Ptr<Node> n, int t, int b, bool s, double r, doub
 {
 }
 
-Clients_Models::Clients_Models(Ptr<Node> n, int t, int b, double r, double sin, double acc)
+ClientModels::ClientModels(Ptr<Node> n, int t, int b, double r, double sin, double acc)
     : node(n),
       nodeTrainingTime(t),
       nodeModelSize(b),
@@ -24,7 +24,7 @@ Clients_Models::Clients_Models(Ptr<Node> n, int t, int b, double r, double sin, 
 }
 
 // Overload the '<<' operator for Clients_Models
-std::ostream& operator<<(std::ostream& os, const Clients_Models& model)
+std::ostream& operator<<(std::ostream& os, const ClientModels& model)
 {
     os << "Clients_Models { id: " << model.node->GetId()
        << ", training_time: " << model.nodeTrainingTime << ", node_to_bytes: " << model.nodeModelSize
@@ -35,7 +35,7 @@ std::ostream& operator<<(std::ostream& os, const Clients_Models& model)
 
 // Implementation of NodesIps constructor
 NodesIps::NodesIps(int n, int i, Ipv4Address ia)
-    : node_id(n),
+    : nodeId(n),
       index(i),
       ip(ia)
 {

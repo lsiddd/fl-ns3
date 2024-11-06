@@ -25,9 +25,9 @@ using namespace ns3;
 
 static const uint32_t writeSize = 2500;
 uint8_t data[writeSize] = {'g'};
-uint8_t data_fin[writeSize] = {'b'};
+uint8_t dataFin[writeSize] = {'b'};
 
-std::pair<uint16_t, uint16_t> get_ue_rnti_cellid(Ptr<ns3::NetDevice> ueNetDevice)
+std::pair<uint16_t, uint16_t> getUeRntiCellid(Ptr<ns3::NetDevice> ueNetDevice)
 {
     auto rnti = ueNetDevice->GetObject<LteUeNetDevice>()->GetRrc()->GetRnti();
     auto cellid = ueNetDevice->GetObject<LteUeNetDevice>()->GetRrc()->GetCellId();
@@ -49,12 +49,12 @@ void ReportUeSinrRsrp(uint16_t cellId,
 
 
 
-std::vector<NodesIps>node_to_ips()
+std::vector<NodesIps>nodeToIps()
 {
     std::vector<NodesIps> nodes_ips;
 
     for (uint32_t i = 0; i < ueNodes.GetN(); i++) {
-        Ipv4Address receiving_address;
+        Ipv4Address receivingAddress;
         Ptr<Ipv4> ipv4 = ueNodes.Get(i)->GetObject<Ipv4>();
         Ipv4InterfaceAddress iaddr = ipv4->GetAddress(1, 0);
         Ipv4Address ipAddr = iaddr.GetLocal();
@@ -122,7 +122,7 @@ void sendStream(Ptr<Node> sendingNode, Ptr<Node> receivingNode, int size)
                DataRate("5Mb/s"),
                writeSize,
                data,
-               data_fin);
+               dataFin);
     sendingNode->AddApplication(app);
     // Schedule the start and stop times for the application
     app->SetStartTime(Seconds(0.5));
@@ -209,7 +209,7 @@ int64_t runScriptAndMeasureTime(const std::string& scriptPath)
 }
 
 
-bool finished_transmission(std::vector<NodesIps> nodes_ips, std::vector<Clients_Models>& clients_info)
+bool checkFinishedTransmission(std::vector<NodesIps> nodes_ips, std::vector<ClientModels>& clients_info)
 {
     bool finished = true;
     bool clients_selected = false;
@@ -222,7 +222,7 @@ bool finished_transmission(std::vector<NodesIps> nodes_ips, std::vector<Clients_
             Ipv4Address node_ip;
 
             for (auto nip : nodes_ips) {
-                if (nip.node_id == node_id) {
+                if (nip.nodeId == node_id) {
                     node_ip = nip.ip;
                     // LOG("considering client " << node_ip);
                 }
@@ -252,12 +252,12 @@ bool finished_transmission(std::vector<NodesIps> nodes_ips, std::vector<Clients_
     }
 }
 
-void network_info(Ptr<FlowMonitor> monitor)
+void networkInfo(Ptr<FlowMonitor> monitor)
 {
     static double lastTotalRxBytes = 0;
     static double lastTotalTxBytes = 0;
     static double lastTime = 0;
-    Simulator::Schedule(Seconds(1), &network_info, monitor);
+    Simulator::Schedule(Seconds(1), &networkInfo, monitor);
     monitor->CheckForLostPackets();
     Ptr<Ipv4FlowClassifier> classifier = DynamicCast<Ipv4FlowClassifier>(flowmon.GetClassifier());
     FlowMonitor::FlowStatsContainer stats = monitor->GetFlowStats();
@@ -275,12 +275,15 @@ void network_info(Ptr<FlowMonitor> monitor)
     double instantTxThroughput = (totalTxBytes - lastTotalTxBytes) * 8.0 / timeDiff / 1000 / 1000;
     LOG(currentTime << "s: Instant Network Throughput: " << instantThroughput << " Mbps");
     LOG(currentTime << "s: Instant Tx Throughput: " << instantTxThroughput << " Mbps");
+
+    throughput_df.addRow({Simulator::Now().GetSeconds(), instantTxThroughput, instantThroughput});
+
     lastTotalRxBytes = totalRxBytes;
     lastTotalTxBytes = totalTxBytes;
     lastTime = currentTime;
 }
 
-void round_cleanup()
+void roundCleanup()
 {
     endOfStreamTimes.clear();
 

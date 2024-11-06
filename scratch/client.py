@@ -47,13 +47,56 @@ class TrainRequest(BaseModel):
     top_n: int
     model: str
 
+def split_data(train_images, train_labels, n_clients, client_id, non_iid_factor=0.5):
+    """
+    Splits the dataset into chunks for each client in a deterministic yet non-IID manner.
+    
+    Args:
+        train_images: The training images dataset.
+        train_labels: The training labels dataset.
+        n_clients: Number of clients.
+        client_id: The client ID for which the data is being split.
+        non_iid_factor: A float between 0 and 1. 0 means IID distribution, and 1 means fully non-IID distribution.
+        
+    Returns:
+        A tuple of (client_train_images, client_train_labels) specific to the given client.
+    """
+    np.random.seed(client_id)  # Ensures deterministic data splits per client
 
-def split_data(train_images, train_labels, n_clients, client_id):
+    unique_classes = np.unique(train_labels)
+    n_classes = len(unique_classes)
     data_size = len(train_images)
     chunk_size = data_size // n_clients
-    start_index = client_id * chunk_size
-    end_index = data_size if client_id == n_clients - 1 else (client_id + 1) * chunk_size
-    return train_images[start_index:end_index], train_labels[start_index:end_index]
+
+    if non_iid_factor == 0:
+        # IID split: Each client gets a random chunk of data
+        start_index = client_id * chunk_size
+        end_index = data_size if client_id == n_clients - 1 else (client_id + 1) * chunk_size
+        return train_images[start_index:end_index], train_labels[start_index:end_index]
+    
+    else:
+        # Non-IID split: Clients receive data biased towards certain classes
+        class_indices = [np.where(train_labels == c)[0] for c in unique_classes]
+
+        # Determine how many classes to assign to each client
+        n_classes_per_client = max(1, int((1 - non_iid_factor) * n_classes))  # Fewer classes as non_iid_factor increases
+
+        # Assign some classes more heavily to the client
+        selected_classes = np.random.choice(unique_classes, size=n_classes_per_client, replace=False)
+        
+        print(f"client {client_id} classes: {selected_classes}")
+
+        client_indices = []
+        for cls in selected_classes:
+            class_idx = class_indices[cls]
+            np.random.shuffle(class_idx)
+            num_samples_for_class = int((non_iid_factor + 1) * len(class_idx) / n_clients)
+            client_indices.extend(class_idx[:num_samples_for_class])
+
+        np.random.shuffle(client_indices)
+        client_data_indices = np.array_split(client_indices, n_clients)[client_id]
+
+        return train_images[client_data_indices], train_labels[client_data_indices]
 
 
 def load_model_from_file(model_filename):

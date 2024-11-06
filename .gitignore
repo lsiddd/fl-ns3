@@ -23,6 +23,7 @@ BonnMotion/bin/
 BonnMotion/classes/
 *~
 *.png
+*.csv
 
 *.o
 *.pyc
