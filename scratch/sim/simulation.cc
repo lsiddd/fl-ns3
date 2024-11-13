@@ -51,17 +51,16 @@ using json = nlohmann::json;
 NS_LOG_COMPONENT_DEFINE("Simulation");
 
 // Global constants
-static constexpr double simStopTime = 300.0;
-static constexpr int numberOfUes = 8;
+static constexpr double simStopTime = 1000.0;
+static constexpr int numberOfUes = 10;
 static constexpr int numberOfEnbs = 10;
 static constexpr int numberOfParticipatingClients = numberOfUes;
 static constexpr int scenarioSize = 1000;
-std::string algorithm = "flips";
+std::string algorithm = "compressed";
 
 DataFrame accuracy_df;
 DataFrame participation_df;
 DataFrame throughput_df;
-
 
 // Global variables for simulation objects
 NodeContainer ueNodes;
@@ -95,7 +94,7 @@ std::vector<ClientModels> clientsInfo;
 std::vector<ClientModels> selectedClients;
 
 // Timeout for certain operations
-Time timeout = Seconds(90);
+Time timeout = Seconds(120);
 static double constexpr managerInterval = 0.1;
 
 void initializeDataFrames()
@@ -147,104 +146,249 @@ json parseJsonFile(const std::string &filepath)
     return j;
 }
 
+// std::vector<ClientModels> trainClients()
+// {
+//     std::vector<ClientModels> clientsInfo;
+//     LOG("=================== " << Simulator::Now().GetSeconds() << " seconds.");
+//     // bool dummy = true;
+//     bool dummy = false;
+//     // Helper function to get RSRP and SINR values
+
+//     if (dummy)
+//     {
+//         const int nodeTrainingTime = 5000; // Constant training time of 5 seconds for dummy mode
+//         const int bytes = 22910076;        // Constant bytes for dummy mode, this is the actual uncompressed model size
+
+//         for (uint32_t i = 0; i < ueNodes.GetN(); ++i)
+//         {
+//             auto [rsrp, sinr] = getRsrpSinr(i);
+//             double dummyAcc = 0.8;
+//             clientsInfo.emplace_back(ueNodes.Get(i), nodeTrainingTime, bytes, rsrp, sinr, dummyAcc);
+//         }
+
+//         return clientsInfo;
+//     }
+
+//     // Sequential training (non-parallel)
+//     for (uint32_t i = 0; i < ueNodes.GetN(); ++i)
+//     {
+//         std::stringstream cmd;
+//         cmd << "curl -X POST \"http://127.0.0.1:8182/train\"  -H \"Content-Type: "
+//                "application/json\" -d '{\"n_clients\": "
+//             << ueNodes.GetN() << ", \"client_id\": " << i
+//             << ", \"epochs\": 1, "
+//                "\"model\": \"models/"
+//             << ueNodes.Get(i) << ".keras\", \"top_n\": 3}'";
+//         LOG(cmd.str()); // Log the command being executed
+//         // Use system() or any alternative to run the script and measure time
+//         // system(cmd.str().c_str());
+//         int ret = system(cmd.str().c_str());
+
+//         if (ret != 0)
+//         {
+//             LOG("Command failed with return code: " << ret);
+//         }
+//     }
+
+//     // Collect the training results
+//     for (uint32_t i = 0; i < ueNodes.GetN(); ++i)
+//     {
+//         std::stringstream finishFile;
+//         finishFile << "models/" << ueNodes.Get(i) << ".finish";
+
+//         if (fileExists(finishFile.str()))
+//         {
+//             std::this_thread::sleep_for(std::chrono::milliseconds(200)); // Sleep for 200ms
+//             std::stringstream modelFile;
+//             modelFile << "models/" << ueNodes.Get(i) << ".keras";
+//             int bytes = getFileSize(modelFile.str());
+//             // Retrieve RSRP and SINR for the current client
+//             auto [rsrp, sinr] = getRsrpSinr(i);
+//             // Parse the JSON file for training duration
+//             {
+//                 std::stringstream jsonFilename;
+//                 jsonFilename << "models/" << ueNodes.Get(i) << ".json";
+//                 json j = parseJsonFile(jsonFilename.str());
+//                 int nodeTrainingTime = j["duration"];
+//                 double accuracy = j["accuracy"];
+//                 if (algorithm == "compressed")
+//                 {
+//                     bytes = j["compressed_size"];
+//                 }
+//                 else if (algorithm == "uncompressed")
+//                 {
+//                     bytes = j["uncompressed_size"];
+//                 }
+//                 else if (algorithm == "compressed_top_n_size")
+//                 {
+//                     bytes = j["compressed_top_n_size"];
+//                 }
+//                 LOG("\nClient " << i << " finished training after " << nodeTrainingTime
+//                                 << " milliseconds");
+//                 LOG(Simulator::Now().GetSeconds() << " seconds : Client " << i << " info: " << j);
+//                 // Store the client information
+//                 clientsInfo.emplace_back(ueNodes.Get(i), nodeTrainingTime, bytes, rsrp, sinr, accuracy);
+//                 accuracy_df.addRow({Simulator::Now().GetSeconds(), i, roundNumber, accuracy,
+//                                     float(j["compressed_size"]), float(j["compressed_top_n_size"]), float(j["duration"]), float(j["loss"]),
+//                                     float(j["number_of_samples"]), float(j["uncompressed_size"]), float(j["val_accuracy"]), float(j["val_loss"])});
+//             }
+
+//             {
+//                 std::stringstream rmCommand;
+//                 rmCommand << "rm models/" << ueNodes.Get(i) << ".finish";
+//                 int ret_rm = system(rmCommand.str().c_str());
+//                 if (ret_rm != 0)
+//                 {
+//                     LOG("Failed to remove file, command returned: " << ret_rm);
+//                 }
+//             }
+//         }
+//         else
+//         {
+//             std::this_thread::sleep_for(std::chrono::milliseconds(200)); // Sleep for 200ms
+//             --i;                                                         // Retry if the file isn't ready yet
+//         }
+//     }
+
+//     return clientsInfo;
+// }
+
 std::vector<ClientModels> trainClients()
 {
     std::vector<ClientModels> clientsInfo;
     LOG("=================== " << Simulator::Now().GetSeconds() << " seconds.");
-    // bool dummy = true;
-    bool dummy = false;
-    // Helper function to get RSRP and SINR values
 
-    if (dummy)
-    {
-        const int nodeTrainingTime = 5000; // Constant training time of 5 seconds for dummy mode
-        const int bytes = 22910076;        // Constant bytes for dummy mode, this is the actual uncompressed model size
+    bool dummy = false;  // Toggle for dummy mode
 
-        for (uint32_t i = 0; i < ueNodes.GetN(); ++i)
-        {
+    // Set up algorithm-specific compression and training factors
+    int compressionFactor = 1;
+    double fedproxMu = 0.1;  // FedProx regularization parameter (used in fedprox)
+
+    if (algorithm == "fedavg") {
+        compressionFactor = 1;  // No additional compression
+    } else if (algorithm == "fedprox") {
+        compressionFactor = 2;  // Moderate compression
+    } else if (algorithm == "weighted_fedavg") {
+        compressionFactor = 1.5;  // Mild compression
+    } else if (algorithm == "pruned_fedavg") {
+        compressionFactor = 3;  // High compression due to pruning
+    }
+
+    if (dummy) {
+        // Dummy mode for quick testing
+        const int nodeTrainingTime = 5000;  // Constant training time of 5 seconds
+        const int bytes = 22910076;         // Base uncompressed model size
+
+        for (uint32_t i = 0; i < ueNodes.GetN(); ++i) {
             auto [rsrp, sinr] = getRsrpSinr(i);
             double dummyAcc = 0.8;
             clientsInfo.emplace_back(ueNodes.Get(i), nodeTrainingTime, bytes, rsrp, sinr, dummyAcc);
         }
-
         return clientsInfo;
     }
 
-    // Sequential training (non-parallel)
-    for (uint32_t i = 0; i < ueNodes.GetN(); ++i)
-    {
+    // Step 1: Issue training requests sequentially for each client
+    for (uint32_t i = 0; i < ueNodes.GetN(); ++i) {
         std::stringstream cmd;
-        cmd << "curl -X POST \"http://127.0.0.1:8182/train\"  -H \"Content-Type: "
-               "application/json\" -d '{\"n_clients\": "
-            << ueNodes.GetN() << ", \"client_id\": " << i
-            << ", \"epochs\": 1, "
-               "\"model\": \"models/"
-            << ueNodes.Get(i) << ".keras\", \"top_n\": 3}'";
-        LOG(cmd.str()); // Log the command being executed
-        // Use system() or any alternative to run the script and measure time
-        // system(cmd.str().c_str());
-        int ret = system(cmd.str().c_str());
+        cmd << "curl -X POST \"http://127.0.0.1:8182/train\" -H \"Content-Type: application/json\" -d '{"
+            << "\"n_clients\": " << ueNodes.GetN() << ", "
+            << "\"client_id\": " << i << ", "
+            << "\"epochs\": 1, "
+            << "\"model\": \"models/" << ueNodes.Get(i) << ".keras\", "
+            << "\"top_n\": 3, "
+            << "\"algorithm\": \"" << algorithm << "\"}'";
+        
+        LOG(cmd.str());  // Log the command
+        int ret = system(cmd.str().c_str());  // Execute the command
 
-        if (ret != 0)
-        {
+        if (ret != 0) {
             LOG("Command failed with return code: " << ret);
         }
     }
 
-    // Collect the training results
-    for (uint32_t i = 0; i < ueNodes.GetN(); ++i)
-    {
+    // Step 2: Wait for training completion and collect metrics for each client
+    for (uint32_t i = 0; i < ueNodes.GetN(); ++i) {
         std::stringstream finishFile;
-        finishFile << "models/" << ueNodes.Get(i) << ".finish";
+        finishFile << "models/" << ueNodes.Get(i) << ".finish";  // Training completion flag file
 
-        if (fileExists(finishFile.str()))
-        {
-            std::this_thread::sleep_for(std::chrono::milliseconds(200)); // Sleep for 200ms
-            std::stringstream modelFile;
-            modelFile << "models/" << ueNodes.Get(i) << ".keras";
-            int bytes = getFileSize(modelFile.str());
-            // Retrieve RSRP and SINR for the current client
-            auto [rsrp, sinr] = getRsrpSinr(i);
-            // Parse the JSON file for training duration
-            {
-                std::stringstream jsonFilename;
-                jsonFilename << "models/" << ueNodes.Get(i) << ".json";
-                json j = parseJsonFile(jsonFilename.str());
-                int nodeTrainingTime = j["duration"];
-                double accuracy = j["accuracy"];
-                if (algorithm == "flips")
-                {
-                    bytes = j["compressed_size"];
-                }
-                LOG("\nClient " << i << " finished training after " << nodeTrainingTime
-                                << " milliseconds");
-                LOG(Simulator::Now().GetSeconds() << " seconds : Client " << i << " info: " << j);
-                // Store the client information
-                clientsInfo.emplace_back(ueNodes.Get(i), nodeTrainingTime, bytes, rsrp, sinr, accuracy);
-                accuracy_df.addRow({Simulator::Now().GetSeconds(), i, roundNumber, accuracy,
-                    float(j["compressed_size"]), float(j["compressed_top_n_size"]), float(j["duration"]), float(j["loss"]),
-                    float(j["number_of_samples"]), float(j["uncompressed_size"]), float(j["val_accuracy"]), float(j["val_loss"])});
-            }
-
-            {
-                std::stringstream rmCommand;
-                rmCommand << "rm models/" << ueNodes.Get(i) << ".finish";
-                int ret_rm = system(rmCommand.str().c_str());
-                if (ret_rm != 0)
-                {
-                    LOG("Failed to remove file, command returned: " << ret_rm);
-                }
-            }
+        // Wait for .finish file to indicate training completion
+        while (!fileExists(finishFile.str())) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(200));
         }
-        else
-        {
-            std::this_thread::sleep_for(std::chrono::milliseconds(200)); // Sleep for 200ms
-            --i;                                                         // Retry if the file isn't ready yet
+
+        // Base model file and size calculation
+        std::stringstream modelFile;
+        modelFile << "models/" << ueNodes.Get(i) << ".keras";
+        int baseModelSize = getFileSize(modelFile.str());  // Default to uncompressed size
+
+        // Retrieve RSRP and SINR for the client
+        auto [rsrp, sinr] = getRsrpSinr(i);
+
+        // Parse the JSON file for training metrics
+        std::stringstream jsonFilename;
+        jsonFilename << "models/" << ueNodes.Get(i) << ".json";
+        json j = parseJsonFile(jsonFilename.str());
+
+        int trainingTime = j["duration"];
+        double accuracy = j["accuracy"];
+        double loss = j["loss"];
+        int adjustedModelSize = baseModelSize;  // Initialize with uncompressed size
+
+        // Apply algorithm-specific adjustments
+        if (algorithm == "fedavg") {
+            // Standard model size
+            adjustedModelSize = baseModelSize;
+        } 
+        else if (algorithm == "fedprox") {
+            // Apply FedProx regularization
+            adjustedModelSize = static_cast<int>(baseModelSize / compressionFactor);
+            accuracy -= fedproxMu * loss;  // Adjust accuracy to simulate FedProx regularization effect
+        } 
+        else if (algorithm == "weighted_fedavg") {
+            // Apply weighted model compression
+            double client_weight = sinr / 100.0;  // Example weight factor based on SINR
+            adjustedModelSize = static_cast<int>(baseModelSize / client_weight);
+        } 
+        else if (algorithm == "pruned_fedavg") {
+            // Apply layer pruning
+            adjustedModelSize = static_cast<int>(baseModelSize / compressionFactor);
+            accuracy *= 0.9;  // Simulate slight accuracy drop due to pruning
+        }
+
+        LOG("Client " << i << " Model Size (Adjusted): " << adjustedModelSize << " bytes");
+
+        // Store client information in the vector
+        clientsInfo.emplace_back(
+            ueNodes.Get(i), trainingTime, adjustedModelSize, rsrp, sinr, accuracy);
+
+        // Log metrics to the DataFrame
+        accuracy_df.addRow({
+            Simulator::Now().GetSeconds(),
+            i,
+            roundNumber,
+            accuracy,
+            float(j["compressed_size"]),
+            float(j["compressed_top_n_size"]),
+            float(trainingTime),
+            float(loss),
+            float(j["number_of_samples"]),
+            float(baseModelSize),
+            float(j["val_accuracy"]),
+            float(j["val_loss"])
+        });
+
+        // Clean up .finish file for next training round
+        std::stringstream rmCommand;
+        rmCommand << "rm " << finishFile.str();
+        int ret_rm = system(rmCommand.str().c_str());
+        if (ret_rm != 0) {
+            LOG("Failed to remove finish file, command returned: " << ret_rm);
         }
     }
 
     return clientsInfo;
 }
+
 
 void getClientsInfo()
 {
@@ -334,6 +478,41 @@ std::vector<ClientModels> clientSelectionRandom(int n, std::vector<ClientModels>
     return clientsInfo;
 }
 
+std::vector<ClientModels> selectClients(int numClients, const std::vector<ClientModels> &clientsInfo)
+{
+    if (algorithm == "fedavg" || algorithm == "fedprox")
+    {
+        return clientSelectionRandom(numClients, clientsInfo);
+    }
+    else if (algorithm == "weighted_fedavg")
+    {
+        // Select clients with better signal quality
+        return clientSelectionSinr(numClients, clientsInfo);
+    }
+    else if (algorithm == "pruned_fedavg")
+    {
+        // Select clients with higher accuracy scores
+        std::vector<std::pair<double, ClientModels>> accuracyClients;
+        for (const auto &client : clientsInfo)
+        {
+            accuracyClients.push_back({client.accuracy, client});
+        }
+
+        // Sort by accuracy in descending order and select top clients
+        std::sort(accuracyClients.begin(), accuracyClients.end(),
+                  [](const auto &a, const auto &b)
+                  { return a.first > b.first; });
+
+        std::vector<ClientModels> selectedClients;
+        for (int i = 0; i < numClients && (long unsigned int)i < accuracyClients.size(); ++i)
+        {
+            selectedClients.push_back(accuracyClients[i].second);
+        }
+        return selectedClients;
+    }
+    return clientSelectionSinr(numClients, clientsInfo);
+}
+
 void logServerEvaluation()
 {
     // Helper function to parse JSON file with error handling
@@ -377,32 +556,88 @@ void logServerEvaluation()
 
 void aggregation()
 {
-    if (algorithm == "flips")
+    if (algorithm == "fedavg")
     {
-        runScriptAndMeasureTime("scratch/server_flips.py");
+        runScriptAndMeasureTime("scratch/server.py --aggregation fedavg");
     }
-    else
+    else if (algorithm == "fedprox")
     {
-        runScriptAndMeasureTime("scratch/server.py");
+        runScriptAndMeasureTime("scratch/server.py --aggregation fedprox");
+    }
+    else if (algorithm == "weighted_fedavg")
+    {
+        runScriptAndMeasureTime("scratch/server.py --aggregation weighted_fedavg");
+    }
+    else if (algorithm == "pruned_fedavg")
+    {
+        runScriptAndMeasureTime("scratch/server.py --aggregation pruned_fedavg");
     }
     logServerEvaluation();
 }
 
-void sendModelsToServer(std::vector<ClientModels> clients)
+// void aggregation()
+// {
+//     // if (algorithm == "flips")
+//     // {
+//     //     runScriptAndMeasureTime("scratch/server_flips.py");
+//     // }
+//     // else
+//     // {
+//     //     runScriptAndMeasureTime("scratch/server.py");
+//     // }
+//     if (algorithm == "compressed")
+//     {
+
+//         runScriptAndMeasureTime("scratch/server.py --aggregation fedavg");
+//     }
+//     else if (algorithm == "uncompressed")
+//     {
+//         runScriptAndMeasureTime("scratch/server.py --aggregation fedprox");
+//     }
+//     else if (algorithm == "compressed_top_n_size")
+//     {
+//         runScriptAndMeasureTime("scratch/server.py --agregation weighted_fedavg");
+//     }
+//     logServerEvaluation();
+// }
+
+void sendModelsToServer(const std::vector<ClientModels> &clients)
 {
-    for (auto i : clients)
+    for (const auto &client : clients)
     {
-        if (i.selected)
+        if (client.selected)
         {
-            LOG("Client " << i << " scheduling send model.");
-            Simulator::Schedule(MilliSeconds(i.nodeTrainingTime),
+            int adjustedSize = client.nodeModelSize;
+            if (algorithm == "pruned_fedavg")
+            {
+                adjustedSize *= 0.5; // Simulate pruning by reducing data size
+            }
+
+            LOG("Client " << client.node << " scheduling send model of size " << adjustedSize << " bytes.");
+            Simulator::Schedule(MilliSeconds(client.nodeTrainingTime),
                                 &sendStream,
-                                i.node,
+                                client.node,
                                 remoteHostContainer.Get(0),
-                                i.nodeModelSize);
+                                adjustedSize);
         }
     }
 }
+
+// void sendModelsToServer(std::vector<ClientModels> clients)
+// {
+//     for (auto i : clients)
+//     {
+//         if (i.selected)
+//         {
+//             LOG("Client " << i << " scheduling send model.");
+//             Simulator::Schedule(MilliSeconds(i.nodeTrainingTime),
+//                                 &sendStream,
+//                                 i.node,
+//                                 remoteHostContainer.Get(0),
+//                                 i.nodeModelSize);
+//         }
+//     }
+// }
 
 void writeSuccessfulClients()
 {
@@ -433,7 +668,8 @@ void manager()
 {
     static Time roundStart;
 
-    if (algorithm == "flips" && endOfStreamTimes.size() > numberOfParticipatingClients * 2 / 3) {
+    if (algorithm == "flips" && endOfStreamTimes.size() > numberOfParticipatingClients * 2 / 3)
+    {
         roundFinished = true;
         LOG("Round timed out, not all clients were able to send " << endOfStreamTimes.size() << "/"
                                                                   << numberOfParticipatingClients);
@@ -470,7 +706,8 @@ void manager()
                               << " seconds.");
         clientsInfo = trainClients();
         // selected_clients = client_selection(numberOfParticipatingClients, clients_info);
-        selectedClients = clientSelectionSinr(numberOfParticipatingClients, clientsInfo);
+        // selectedClients = clientSelectionSinr(numberOfParticipatingClients, clientsInfo);
+        selectedClients = selectClients(numberOfParticipatingClients, clientsInfo);
 
         sendModelsToServer(selectedClients);
 
@@ -523,7 +760,11 @@ int main(int argc, char *argv[])
 
     initializeDataFrames();
 
+    // CommandLine cmd;
+    // cmd.Parse(argc, argv);
+
     CommandLine cmd;
+    cmd.AddValue("algorithm", "Select the aggregation method for federated learning", algorithm);
     cmd.Parse(argc, argv);
 
     // set up helpers

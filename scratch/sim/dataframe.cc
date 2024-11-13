@@ -19,7 +19,7 @@ void DataFrame::addRow(const std::vector<DataFrameElement>& rowData) {
 }
 
 // Insert data into a specific cell
-void DataFrame::insertData(int row, int col, const DataFrameElement& value) {
+void DataFrame::insertData(long unsigned int row, long unsigned int col, const DataFrameElement& value) {
     if (row < data.size() && col < data[row].size()) {
         data[row][col] = value;
     } else {

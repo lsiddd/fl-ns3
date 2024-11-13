@@ -7,6 +7,7 @@
 #include <fstream>
 #include <variant> // To store mixed types
 #include <sstream>
+#include <cstdint>
 
 // Define a variant that can hold several types (int, double, string, etc.)
 using DataFrameElement = std::variant<int, double, std::string, uint32_t>;
@@ -23,7 +24,7 @@ public:
     void addRow(const std::vector<DataFrameElement>& rowData);
 
     // Function to insert data into a specific cell (row, column)
-    void insertData(int row, int col, const DataFrameElement& value);
+    void insertData(long unsigned int row, long unsigned int col, const DataFrameElement& value);
 
     // Function to save the DataFrame to a CSV file
     void toCsv(const std::string& filename) const;

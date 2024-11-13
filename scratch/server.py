@@ -1,6 +1,7 @@
 import json
 import os
 import zlib
+import argparse
 from glob import glob
 
 import numpy as np
@@ -23,7 +24,6 @@ def load_fashionmnist_data(validation_split=0.2):
 
 def load_models_from_selected_clients(directory, selected_clients):
     selected_clients = {client.split("/")[1] for client in selected_clients}
-
     return [
         tf.keras.models.load_model(os.path.join(directory, filename))
         for filename in os.listdir(directory)
@@ -31,178 +31,210 @@ def load_models_from_selected_clients(directory, selected_clients):
     ]
 
 
-def get_layer_importance(json_info, layer_name):
-    for layer in json_info:
-        if layer[1] == layer_name:
-            return layer[2]
+def evaluate_layer_importance(model, validation_data):
+    """
+    Zero out each layer individually and measure the drop in validation accuracy.
+    Returns a dictionary of layers with their corresponding impact scores.
+    """
+    layer_importance = {}
+    original_weights = [layer.get_weights() for layer in model.layers]
+    _, original_accuracy = model.evaluate(*validation_data, verbose=0)
+
+    for i, layer in enumerate(model.layers):
+        if not layer.get_weights():  # Skip layers without weights
+            continue
+
+        # Zero out the weights of the current layer
+        zeroed_weights = [np.zeros_like(w) for w in layer.get_weights()]
+        layer.set_weights(zeroed_weights)
+
+        # Evaluate accuracy with the current layer zeroed out
+        _, new_accuracy = model.evaluate(*validation_data, verbose=0)
+        accuracy_drop = original_accuracy - new_accuracy
+
+        # Restore the original weights
+        layer.set_weights(original_weights[i])
+
+        # Record the accuracy impact for the layer
+        layer_importance[layer.name] = accuracy_drop
+
+    return layer_importance
 
 
-def fedavg(models, selected_clients_json_info):
+def prune_layers_by_importance(model, layer_importance, pruning_fraction=0.2):
+    """
+    Prunes a fraction of layers based on their impact score.
+    The less impactful layers (lower accuracy drop) are pruned first.
+    """
+    num_layers_to_prune = int(len(layer_importance) * pruning_fraction)
+    sorted_layers = sorted(layer_importance.items(), key=lambda x: x[1])
 
+    for layer_name, _ in sorted_layers[:num_layers_to_prune]:
+        for layer in model.layers:
+            if layer.name == layer_name:
+                # Zero out the least impactful layer's weights
+                zeroed_weights = [np.zeros_like(w) for w in layer.get_weights()]
+                layer.set_weights(zeroed_weights)
+                print(f"Pruned layer: {layer.name}")
+
+    return model
+
+    
+def fedavg(models):
     avg_weights = []
-
     for layer_index in range(len(models[0].layers)):
-
-        layer_weights = []
-
-        for client_index, model in enumerate(models):
-
-            layer_weight = model.layers[layer_index].get_weights()
-            layer_name = models[0].layers[layer_index].name
-            layer_importance = get_layer_importance(
-                selected_clients_json_info[client_index]["layer_importances"], layer_name
-            )
-
-            if selected_clients_json_info[client_index]["layer_importances"][1] == layer_name:
-                print(layer_name)
-
-            layer_weights.append(layer_weight)
-
-        if layer_weights[0]:
-
-            averaged_layer_weights = []
-            for weights_set in zip(*layer_weights):
-                weights_stack = np.stack(weights_set, axis=0)
-                avg_weights_set = np.mean(weights_stack, axis=0)
-                averaged_layer_weights.append(avg_weights_set)
-
-            avg_weights.append(averaged_layer_weights)
-        else:
-
-            avg_weights.append([])
-
+        layer_weights = [model.layers[layer_index].get_weights() for model in models]
+        averaged_layer_weights = [np.mean(np.stack(weights), axis=0) for weights in zip(*layer_weights)]
+        avg_weights.append(averaged_layer_weights)
     return avg_weights
 
 
-def quantize_weights(weights, quantization_levels):
-    quantized_weights = []
+def fedprox(models, global_model, mu=0.1):
+    avg_weights = []
+    for layer_index in range(len(global_model.layers)):
+        print(f"fedprox layer index {layer_index}")
+        # Get the weights for each model and the global model for the current layer
+        layer_weights = [model.layers[layer_index].get_weights() for model in models]
+        global_weights = global_model.layers[layer_index].get_weights()
 
-    for layer_weights in weights:
-        if isinstance(layer_weights, list):
+        # Ensure prox_weights are computed component-wise for each part of the layer weights (e.g., kernel, bias)
+        prox_weights = []
+        for w_set, gw in zip(zip(*layer_weights), global_weights):
+            prox_set = [(1 - mu) * w + mu * gw for w in w_set]
+            prox_weights.append(np.mean(np.stack(prox_set), axis=0))
 
-            quantized_layer = []
-            for component in layer_weights:
-
-                min_val = np.min(component)
-                max_val = np.max(component)
-
-                step_size = (max_val - min_val) / (quantization_levels - 1)
-
-                quantized_component = np.round((component - min_val) / step_size) * step_size + min_val
-                quantized_layer.append(quantized_component)
-
-            quantized_weights.append(quantized_layer)
-        else:
-
-            min_val = np.min(layer_weights)
-            max_val = np.max(layer_weights)
-
-            step_size = (max_val - min_val) / (quantization_levels - 1)
-
-            quantized_layer = np.round((layer_weights - min_val) / step_size) * step_size + min_val
-
-            quantized_weights.append(quantized_layer)
-
-    return quantized_weights
+        avg_weights.append(prox_weights)
+    return avg_weights
 
 
-def compress_weights(weights):
-
-    flat_weights = []
-
-    for layer_weights in weights:
-        if isinstance(layer_weights, list):
-
-            for component in layer_weights:
-                flat_weights.append(component.flatten())
-        else:
-
-            flat_weights.append(layer_weights.flatten())
-
-    flat_weights = np.concatenate(flat_weights)
-
-    weight_bytes = flat_weights.tobytes()
-
-    compressed_weights = zlib.compress(weight_bytes)
-
-    return compressed_weights
+def weighted_fedavg(models, client_weights):
+    avg_weights = []
+    for layer_index in range(len(models[0].layers)):
+        layer_weights = [model.layers[layer_index].get_weights() for model in models]
+        weighted_layer = [np.average(np.stack(weights), axis=0, weights=client_weights) for weights in zip(*layer_weights)]
+        avg_weights.append(weighted_layer)
+    return avg_weights
 
 
-def set_model_weights(model_template, quantized_weights):
+# def evaluate_layer_importance(model, validation_data):
+#     """
+#     Zero out each layer individually and measure the drop in validation accuracy.
+#     Returns a dictionary of layers with their corresponding impact scores.
+#     """
+#     layer_importance = {}
+#     original_weights = [layer.get_weights() for layer in model.layers]
+#     _, original_accuracy = model.evaluate(*validation_data, verbose=0)
+
+#     for i, layer in enumerate(model.layers):
+#         if not layer.get_weights():  # Skip layers without weights
+#             continue
+
+#         # Zero out the weights of the current layer
+#         zeroed_weights = [np.zeros_like(w) for w in layer.get_weights()]
+#         layer.set_weights(zeroed_weights)
+
+#         # Evaluate accuracy with the current layer zeroed out
+#         _, new_accuracy = model.evaluate(*validation_data, verbose=0)
+#         accuracy_drop = original_accuracy - new_accuracy
+
+#         # Restore the original weights
+#         layer.set_weights(original_weights[i])
+
+#         # Record the accuracy impact for the layer
+#         layer_importance[layer.name] = accuracy_drop
+
+#     return layer_importance
+
+
+# def prune_layers_by_importance(model, layer_importance, pruning_fraction=0.2):
+#     """
+#     Prunes a fraction of layers based on their impact score.
+#     The less impactful layers (lower accuracy drop) are pruned first.
+#     """
+#     num_layers_to_prune = int(len(layer_importance) * pruning_fraction)
+#     sorted_layers = sorted(layer_importance.items(), key=lambda x: x[1])
+
+#     for layer_name, _ in sorted_layers[:num_layers_to_prune]:
+#         for layer in model.layers:
+#             if layer.name == layer_name:
+#                 # Zero out the least impactful layer's weights
+#                 zeroed_weights = [np.zeros_like(w) for w in layer.get_weights()]
+#                 layer.set_weights(zeroed_weights)
+#                 print(f"Pruned layer: {layer.name}")
+
+#     return model
+
+
+def set_model_weights(model_template, weights):
     for layer_index, layer in enumerate(model_template.layers):
         layer_weights = layer.get_weights()
-        if len(layer_weights) != len(quantized_weights[layer_index]):
-            raise ValueError(
-                f"Layer {layer.name} expected {len(layer_weights)} weights, "
-                f"but received {len(quantized_weights[layer_index])} weights."
-            )
+        
+        if len(layer_weights) != len(weights[layer_index]):
+            print(f"Skipping layer '{layer.name}' due to weight mismatch.")
+            continue
 
-        layer.set_weights(quantized_weights[layer_index])
+        try:
+            layer.set_weights(weights[layer_index])
+        except ValueError as e:
+            print(f"Could not set weights for layer '{layer.name}': {e}")
+
 
 
 def load_validation_data():
-
     (_, _), validation_data, (_, _) = load_fashionmnist_data(validation_split=0.2)
     return validation_data
 
 
 def main():
-    # Define file paths and settings
+    parser = argparse.ArgumentParser(description="Federated Learning with Model Pruning")
+    parser.add_argument(
+        "--aggregation", choices=["fedavg", "fedprox", "weighted_fedavg", "pruned_fedavg"], required=True,
+        help="Select aggregation method for federated learning"
+    )
+    parser.add_argument("--pruning_fraction", type=float, default=0.2,
+                        help="Fraction of layers to prune based on accuracy impact (for pruned_fedavg only)")
+
+    args = parser.parse_args()
+    
     model_dir = "models/"
     clients_file = "successful_clients.json"
-    output_model_path = "models/fedavg_model.keras"
+    output_model_path = "models/final_model.keras"
     quantization_factor = 256
 
-    # Load successful clients and their model metadata
+    # Load successful clients and their models
     with open(clients_file, "r") as f:
         successful_clients = json.load(f)["successful_clients"]
-
-    client_metadata = [json.load(open(client.replace(".keras", ".json"))) for client in successful_clients]
-
-    # Load models and validation data
     models = load_models_from_selected_clients(model_dir, successful_clients)
-    if not models:
-        raise ValueError("No models found for the selected clients.")
-
     validation_data = load_validation_data()
 
-    # Perform FedAvg, quantize, and compress weights
-    avg_weights = fedavg(models, client_metadata)
-    quantized_weights = quantize_weights(avg_weights, quantization_factor)
-    compressed_weights = compress_weights(quantized_weights)
+    # Select the aggregation method
+    if args.aggregation == "fedavg":
+        avg_weights = fedavg(models)
+    elif args.aggregation == "fedprox":
+        global_model = models[0]  # Assume a global model for FedProx
+        avg_weights = fedprox(models, global_model)
+    elif args.aggregation == "weighted_fedavg":
+        # Assume some client-specific weights; here, we use equal weights as a placeholder
+        client_weights = [1.0] * len(models)
+        avg_weights = weighted_fedavg(models, client_weights)
+    elif args.aggregation == "pruned_fedavg":
+        # Evaluate importance of each layer in the global model
+        global_model = models[0]
+        layer_importance = evaluate_layer_importance(global_model, validation_data)
+        print("Layer importance scores:", layer_importance)
+        # Prune the least impactful layers
+        pruned_model = prune_layers_by_importance(global_model, layer_importance, args.pruning_fraction)
+        avg_weights = pruned_model.get_weights()
+    
+    # Save the final pruned/aggregated model
+    final_model = models[0]
+    set_model_weights(final_model, avg_weights)
+    final_model.save(output_model_path)
+    print(f"Final model saved at: {output_model_path}")
 
-    print(f"Compressed model size: {len(compressed_weights)} bytes")
-
-    # Save the FedAvg model with quantized weights
-    fedavg_model = models[0]
-    set_model_weights(fedavg_model, quantized_weights)
-    fedavg_model.save(output_model_path)
-    print(f"FedAvg model saved at: {output_model_path}")
-
-    # Evaluate the FedAvg model
-    val_loss, val_accuracy = fedavg_model.evaluate(*validation_data, verbose=2)
-
-    # Replace client models with the FedAvg model
-    for filename in os.listdir(model_dir):
-        if filename.endswith(".keras"):
-            fedavg_model.save(os.path.join(model_dir, filename))
-            print(f"Replaced client model at: {filename}")
-
-    # Calculate and log metrics
-    final_compressed_size = len(compress_weights(quantize_weights(fedavg_model.get_weights(), quantization_factor)))
-    with open("metrics.txt", "a+") as metrics_file:
-        metrics_file.write(f"Validation Loss: {val_loss}\nValidation Accuracy: {val_accuracy}\n")
-
-    evaluation_metrics = {
-        "Validation Loss": val_loss,
-        "Validation Accuracy": val_accuracy,
-        "Compressed Model Size (bytes)": final_compressed_size,
-    }
-    with open("evaluation_metrics.json", "w") as json_file:
-        json.dump(evaluation_metrics, json_file, indent=4)
-
+    # Evaluate the final model
+    val_loss, val_accuracy = final_model.evaluate(*validation_data, verbose=2)
     print(f"Validation Loss: {val_loss}, Validation Accuracy: {val_accuracy}")
-    print(f"Compressed Model Size: {final_compressed_size} bytes")
 
 
 if __name__ == "__main__":
