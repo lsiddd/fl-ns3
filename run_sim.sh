@@ -35,7 +35,7 @@ trap cleanup SIGINT
 
 # Define different values for numberOfUes and algorithm to iterate over
 ues_values=(10 20 30 40 50)  # Adjust these values as needed
-algorithms=("compressed" "uncompressed" "compressed_top_n_size")
+algorithms=("fedavg" "fedprox" "weighted_fedavg" "pruned_fedavg")
 
 # Main simulation directory to store all runs
 mkdir -p simulations
