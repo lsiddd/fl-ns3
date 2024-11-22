@@ -51,12 +51,12 @@ using json = nlohmann::json;
 NS_LOG_COMPONENT_DEFINE("Simulation");
 
 // Global constants
-static constexpr double simStopTime = 1000.0;
+static constexpr double simStopTime = 500.0;
 static constexpr int numberOfUes = 10;
-static constexpr int numberOfEnbs = 10;
+static constexpr int numberOfEnbs = 1;
 static constexpr int numberOfParticipatingClients = numberOfUes;
 static constexpr int scenarioSize = 1000;
-std::string algorithm = "compressed";
+std::string algorithm = "fedavg";
 
 DataFrame accuracy_df;
 DataFrame participation_df;
@@ -259,6 +259,7 @@ std::vector<ClientModels> trainClients()
     LOG("=================== " << Simulator::Now().GetSeconds() << " seconds.");
 
     bool dummy = false;  // Toggle for dummy mode
+    // bool dummy = true;  // Toggle for dummy mode
 
     // Set up algorithm-specific compression and training factors
     int compressionFactor = 1;
@@ -278,6 +279,7 @@ std::vector<ClientModels> trainClients()
         // Dummy mode for quick testing
         const int nodeTrainingTime = 5000;  // Constant training time of 5 seconds
         const int bytes = 22910076;         // Base uncompressed model size
+        // const int bytes = 22910076;         // Base uncompressed model size
 
         for (uint32_t i = 0; i < ueNodes.GetN(); ++i) {
             auto [rsrp, sinr] = getRsrpSinr(i);
@@ -320,6 +322,7 @@ std::vector<ClientModels> trainClients()
         std::stringstream modelFile;
         modelFile << "models/" << ueNodes.Get(i) << ".keras";
         int baseModelSize = getFileSize(modelFile.str());  // Default to uncompressed size
+        baseModelSize /= 2;
 
         // Retrieve RSRP and SINR for the client
         auto [rsrp, sinr] = getRsrpSinr(i);
@@ -332,12 +335,12 @@ std::vector<ClientModels> trainClients()
         int trainingTime = j["duration"];
         double accuracy = j["accuracy"];
         double loss = j["loss"];
-        int adjustedModelSize = baseModelSize;  // Initialize with uncompressed size
+        int adjustedModelSize = j["compressed_size"];  // Initialize with uncompressed size
 
         // Apply algorithm-specific adjustments
         if (algorithm == "fedavg") {
             // Standard model size
-            adjustedModelSize = baseModelSize;
+            adjustedModelSize = j["compressed_size"];
         } 
         else if (algorithm == "fedprox") {
             // Apply FedProx regularization
@@ -736,13 +739,13 @@ void ConfigureDefaults()
     Config::SetDefault("ns3::LteSpectrumPhy::CtrlErrorModelEnabled", BooleanValue(true));
     Config::SetDefault("ns3::LteSpectrumPhy::DataErrorModelEnabled", BooleanValue(true));
     Config::SetDefault("ns3::LteHelper::UseIdealRrc", BooleanValue(false));
-    Config::SetDefault("ns3::LteHelper::UsePdschForCqiGeneration", BooleanValue(true));
-    Config::SetDefault("ns3::LteUePhy::EnableUplinkPowerControl", BooleanValue(true));
-    Config::SetDefault("ns3::LteUePowerControl::ClosedLoop", BooleanValue(true));
+    // Config::SetDefault("ns3::LteHelper::UsePdschForCqiGeneration", BooleanValue(true));
+    // Config::SetDefault("ns3::LteUePhy::EnableUplinkPowerControl", BooleanValue(true));
+    // Config::SetDefault("ns3::LteUePowerControl::ClosedLoop", BooleanValue(true));
     Config::SetDefault("ns3::LteUePowerControl::AccumulationEnabled", BooleanValue(false));
     // Config::SetDefault("ns3::LteEnbPhy::TxPower", DoubleValue(43.0));
     // lower the ue tx power for more challenging transmission
-    // Config::SetDefault("ns3::LteUePhy::TxPower", DoubleValue(5.0));
+    Config::SetDefault("ns3::LteUePhy::TxPower", DoubleValue(20.0));
 
     // Config::SetDefault("ns3::PhasedArrayModel::AntennaElement",
     //                    PointerValue(CreateObject<IsotropicAntennaModel>()));

@@ -192,7 +192,7 @@ int64_t runScriptAndMeasureTime(const std::string& scriptPath)
     std::string modelPath = extractModelPath(scriptPath);
     std::string cmdOutputFile = modelPath + ".txt";
     std::string command =
-        "python3 " + scriptPath + " > " + cmdOutputFile + " 2>&1"; // Redirect output to a file
+        "python3 " + scriptPath + " > " + cmdOutputFile; // Redirect output to a file
     int result = system(command.c_str());                     // Run the Python script
     auto endTime = std::chrono::high_resolution_clock::now(); // Record end time
     int64_t duration = std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime)

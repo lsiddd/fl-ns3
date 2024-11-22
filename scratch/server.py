@@ -8,7 +8,20 @@ import numpy as np
 import tensorflow as tf
 from sklearn.model_selection import train_test_split
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
+# os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
+
+
+def check_gpus():
+    gpus = tf.config.list_physical_devices('GPU')
+    if gpus:
+        print(f"GPUs are available. Number of GPUs: {len(gpus)}")
+        for gpu in gpus:
+            print(f"GPU: {gpu}")
+    else:
+        print("No GPUs found.")
+
+# Run the function to check for GPUs
+check_gpus()
 
 
 def load_fashionmnist_data(validation_split=0.2):
@@ -232,8 +245,15 @@ def main():
     final_model.save(output_model_path)
     print(f"Final model saved at: {output_model_path}")
 
+
     # Evaluate the final model
     val_loss, val_accuracy = final_model.evaluate(*validation_data, verbose=2)
+    evaluation_metrics = {
+        "Validation Loss": val_loss,
+        "Validation Accuracy": val_accuracy,
+    }
+    with open("evaluation_metrics.json", "w") as json_file:
+        json.dump(evaluation_metrics, json_file, indent=4)
     print(f"Validation Loss: {val_loss}, Validation Accuracy: {val_accuracy}")
 
 

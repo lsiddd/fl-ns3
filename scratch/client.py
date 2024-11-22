@@ -14,6 +14,19 @@ app = FastAPI()
 
 # Global executor variable
 executor = None
+os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
+import tensorflow as tf
+def check_gpus():
+    gpus = tf.config.list_physical_devices('GPU')
+    if gpus:
+        print(f"GPUs are available. Number of GPUs: {len(gpus)}")
+        for gpu in gpus:
+            print(f"GPU: {gpu}")
+    else:
+        print("No GPUs found.")
+
+# Run the function to check for GPUs
+check_gpus()
 
 
 RETRY_COUNT = 3  # Number of retries for each client request
@@ -83,42 +96,95 @@ def process_client_request(client_request):
         test_dataset = tf.data.Dataset.from_tensor_slices(
             (test_images, test_labels)).batch(64).prefetch(tf.data.AUTOTUNE)
 
-        # Define all the required functions inside the process_client_request or import them from a module
-        def split_data(train_images, train_labels, n_clients, client_id, non_iid_factor=0.2):
+        def split_data(train_images, train_labels, n_clients, client_id):
             np.random.seed(client_id)
             unique_classes = np.unique(train_labels)
             n_classes = len(unique_classes)
             data_size = len(train_images)
-            chunk_size = data_size // n_clients
 
-            if non_iid_factor == 0:
-                # IID split
-                start_index = client_id * chunk_size
-                end_index = data_size if client_id == n_clients - \
-                    1 else (client_id + 1) * chunk_size
-                return train_images[start_index:end_index], train_labels[start_index:end_index]
-            else:
-                # Non-IID split
-                class_indices = [np.where(train_labels == c)[0]
-                                 for c in unique_classes]
-                n_classes_per_client = max(
-                    1, int((1 - non_iid_factor) * n_classes))
-                selected_classes = np.random.choice(
-                    unique_classes, size=n_classes_per_client, replace=False)
-                print(f"client {client_id} classes: {selected_classes}")
+            # Total number of samples per client
+            samples_per_client = data_size // n_clients
 
-                client_indices = []
-                for cls in selected_classes:
-                    class_idx = class_indices[cls]
-                    np.random.shuffle(class_idx)
-                    num_samples_for_class = int(
-                        (non_iid_factor + 1) * len(class_idx) / n_clients)
-                    client_indices.extend(class_idx[:num_samples_for_class])
+            # Define mean and standard deviation for Gaussian distribution over classes
+            # Spread mu from 0 to n_classes - 1 across clients
+            mu = client_id * (n_classes - 1) / (n_clients - 1)
+            sigma = n_classes / 2  # Adjust sigma to control the spread
 
-                np.random.shuffle(client_indices)
-                client_data_indices = np.array_split(
-                    client_indices, n_clients)[client_id]
-                return train_images[client_data_indices], train_labels[client_data_indices]
+            # Compute class probabilities using Gaussian distribution
+            class_labels = np.arange(n_classes)
+            class_probabilities = np.exp(-((class_labels - mu) ** 2) / (2 * sigma ** 2))
+            class_probabilities += 1e-6  # Avoid zeros
+            class_probabilities /= np.sum(class_probabilities)  # Normalize to sum to 1
+
+            # Compute number of samples per class for this client
+            num_samples_per_class = (class_probabilities * samples_per_client).astype(int)
+
+            # Ensure at least one sample per class
+            num_samples_per_class[num_samples_per_class == 0] = 1
+
+            # Adjust total number of samples to match samples_per_client
+            total_samples = np.sum(num_samples_per_class)
+            while total_samples > samples_per_client:
+                # Reduce samples from the class with the most samples
+                max_class = np.argmax(num_samples_per_class)
+                num_samples_per_class[max_class] -= 1
+                total_samples -= 1
+            while total_samples < samples_per_client:
+                # Add samples to the class with the most samples
+                max_class = np.argmax(num_samples_per_class)
+                num_samples_per_class[max_class] += 1
+                total_samples += 1
+
+            # Collect indices for each class
+            client_indices = []
+            for cls, num_samples in enumerate(num_samples_per_class):
+                class_indices = np.where(train_labels == cls)[0]
+                np.random.shuffle(class_indices)
+                # Ensure we don't sample more than available
+                num_samples = min(num_samples, len(class_indices))
+                selected_indices = class_indices[:num_samples]
+                client_indices.extend(selected_indices)
+
+            np.random.shuffle(client_indices)
+
+            # Return the data for this client
+            return train_images[client_indices], train_labels[client_indices]
+
+        # def split_data(train_images, train_labels, n_clients, client_id, non_iid_factor=0.2):
+        #     np.random.seed(client_id)
+        #     unique_classes = np.unique(train_labels)
+        #     n_classes = len(unique_classes)
+        #     data_size = len(train_images)
+        #     chunk_size = data_size // n_clients
+
+        #     if non_iid_factor == 0:
+        #         # IID split
+        #         start_index = client_id * chunk_size
+        #         end_index = data_size if client_id == n_clients - \
+        #             1 else (client_id + 1) * chunk_size
+        #         return train_images[start_index:end_index], train_labels[start_index:end_index]
+        #     else:
+        #         # Non-IID split
+        #         class_indices = [np.where(train_labels == c)[0]
+        #                          for c in unique_classes]
+        #         n_classes_per_client = max(
+        #             1, int((1 - non_iid_factor) * n_classes))
+        #         selected_classes = np.random.choice(
+        #             unique_classes, size=n_classes_per_client, replace=False)
+        #         print(f"client {client_id} classes: {selected_classes}")
+
+        #         client_indices = []
+        #         for cls in selected_classes:
+        #             class_idx = class_indices[cls]
+        #             np.random.shuffle(class_idx)
+        #             num_samples_for_class = int(
+        #                 (non_iid_factor + 1) * len(class_idx) / n_clients)
+        #             client_indices.extend(class_idx[:num_samples_for_class])
+
+        #         np.random.shuffle(client_indices)
+        #         client_data_indices = np.array_split(
+        #             client_indices, n_clients)[client_id]
+        #         return train_images[client_data_indices], train_labels[client_data_indices]
 
         def load_model_from_file(model_filename):
             if os.path.exists(model_filename):
@@ -347,6 +413,6 @@ if __name__ == "__main__":
     multiprocessing.set_start_method('spawn', force=True)
 
     # Initialize the executor after setting the start method
-    executor = concurrent.futures.ProcessPoolExecutor(max_workers=3)
+    executor = concurrent.futures.ProcessPoolExecutor(max_workers=6)
 
     uvicorn.run(app, host="0.0.0.0", port=8182)
