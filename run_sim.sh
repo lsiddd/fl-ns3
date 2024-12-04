@@ -34,7 +34,7 @@ cleanup() {
 trap cleanup SIGINT
 
 # Define different values for numberOfUes and algorithm to iterate over
-ues_values=(10 20 30 40 50)  # Adjust these values as needed
+ues_values=(2 10 20 30 40 50)  # Adjust these values as needed
 algorithms=("fedavg" "fedprox" "weighted_fedavg" "pruned_fedavg")
 
 # Main simulation directory to store all runs
@@ -56,7 +56,7 @@ for num_ues in "${ues_values[@]}"; do
         sed -i "s/algorithm = \".*\";/algorithm = \"$algorithm\";/g" scratch/sim/simulation.cc
 
         # Run the Python client in the background and capture its PID
-        nohup python scratch/client.py > "$run_dir/client_exec.txt" 2>&1 &
+        nohup python scratch/client.py | tee "$run_dir/client_exec.txt" 2>&1 &
         client_pid=$!
 
         sleep 10
