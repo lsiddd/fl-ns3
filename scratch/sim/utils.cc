@@ -27,8 +27,7 @@ static const uint32_t writeSize = 2500;
 uint8_t data[writeSize] = {'g'};
 uint8_t dataFin[writeSize] = {'b'};
 
-std::pair<uint16_t, uint16_t> getUeRntiCellid(Ptr<ns3::NetDevice> ueNetDevice)
-{
+std::pair<uint16_t, uint16_t> getUeRntiCellid(Ptr<ns3::NetDevice> ueNetDevice) {
     auto rnti = ueNetDevice->GetObject<LteUeNetDevice>()->GetRrc()->GetRnti();
     auto cellid = ueNetDevice->GetObject<LteUeNetDevice>()->GetRrc()->GetCellId();
     return std::make_pair(rnti, cellid);
@@ -38,8 +37,7 @@ void ReportUeSinrRsrp(uint16_t cellId,
                       uint16_t rnti,
                       double rsrp,
                       double sinr,
-                      uint8_t componentCarrierId)
-{
+                      uint8_t componentCarrierId) {
     //   std::cout << "CellId: " << cellId << ", RNTI: " << rnti
     //             << ", RSRP: " << rsrp << " dBm, SINR: " << sinr << " dB "  << " cc Id: " <<
     //             componentCarrierId << std::endl;
@@ -49,8 +47,7 @@ void ReportUeSinrRsrp(uint16_t cellId,
 
 
 
-std::vector<NodesIps>nodeToIps()
-{
+std::vector<NodesIps>nodeToIps() {
     std::vector<NodesIps> nodes_ips;
 
     for (uint32_t i = 0; i < ueNodes.GetN(); i++) {
@@ -64,8 +61,7 @@ std::vector<NodesIps>nodeToIps()
     return nodes_ips;
 }
 
-void RxCallback(const std::string path, Ptr<const Packet> packet, const Address& from)
-{
+void RxCallback(const std::string path, Ptr<const Packet> packet, const Address& from) {
     uint32_t packetSize = packet->GetSize();
     std::vector<uint8_t> buffer(packetSize);
     packet->CopyData(buffer.data(), packetSize);
@@ -81,8 +77,7 @@ void RxCallback(const std::string path, Ptr<const Packet> packet, const Address&
     }
 }
 
-void sendStream(Ptr<Node> sendingNode, Ptr<Node> receivingNode, int size)
-{
+void sendStream(Ptr<Node> sendingNode, Ptr<Node> receivingNode, int size) {
     static uint16_t port = 5000; // Initialized once and incremented for each call
     port++;
     constexpr int packetSize = 1040;  // Defined as a constant for better readability
@@ -133,8 +128,7 @@ void sendStream(Ptr<Node> sendingNode, Ptr<Node> receivingNode, int size)
 
 // Utility Functions ==================================
 // Function to get the size of a file
-std::streamsize getFileSize(const std::string& filename)
-{
+std::streamsize getFileSize(const std::string& filename) {
     std::ifstream file(filename,
                        std::ios::binary | std::ios::ate); // Open file in binary mode at the end
 
@@ -147,8 +141,7 @@ std::streamsize getFileSize(const std::string& filename)
 }
 
 // Function to extract model path without suffix and extension
-std::string extractModelPath(const std::string& input)
-{
+std::string extractModelPath(const std::string& input) {
     const std::string modelFlag = "--model ";
     const std::string extension = ".keras";
     const std::string modelSuffix = "_model";
@@ -186,8 +179,7 @@ std::string extractModelPath(const std::string& input)
 }
 
 // Function to run a Python script and measure its execution time
-int64_t runScriptAndMeasureTime(const std::string& scriptPath)
-{
+int64_t runScriptAndMeasureTime(const std::string& scriptPath) {
     auto startTime = std::chrono::high_resolution_clock::now(); // Record start time
     std::string modelPath = extractModelPath(scriptPath);
     std::string cmdOutputFile = modelPath + ".txt";
@@ -209,8 +201,7 @@ int64_t runScriptAndMeasureTime(const std::string& scriptPath)
 }
 
 
-bool checkFinishedTransmission(std::vector<NodesIps> nodes_ips, std::vector<ClientModels>& clients_info)
-{
+bool checkFinishedTransmission(std::vector<NodesIps> nodes_ips, std::vector<ClientModels>& clients_info) {
     bool finished = true;
     bool clients_selected = false;
 
@@ -247,13 +238,14 @@ bool checkFinishedTransmission(std::vector<NodesIps> nodes_ips, std::vector<Clie
     if (finished && clients_selected) {
         LOG("round finished at " << Simulator::Now().GetSeconds() << " seconds.");
         return true;
-    } else {
+    }
+
+    else {
         return false;
     }
 }
 
-void networkInfo(Ptr<FlowMonitor> monitor)
-{
+void networkInfo(Ptr<FlowMonitor> monitor) {
     static double lastTotalRxBytes = 0;
     static double lastTotalTxBytes = 0;
     static double lastTime = 0;
@@ -283,8 +275,7 @@ void networkInfo(Ptr<FlowMonitor> monitor)
     lastTime = currentTime;
 }
 
-void roundCleanup()
-{
+void roundCleanup() {
     endOfStreamTimes.clear();
 
     for (uint32_t i = 0; i < ueNodes.GetN(); i++) {

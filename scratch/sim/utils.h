@@ -64,7 +64,7 @@ std::streamsize getFileSize(const std::string& filename);
 
 // Check if transmission has finished for given nodes and clients
 bool checkFinishedTransmission(std::vector<NodesIps> nodes_ips,
-                           std::vector<ClientModels>& clients_info);
+                               std::vector<ClientModels>& clients_info);
 
 // Output network statistics based on the flow monitor
 void networkInfo(Ptr<FlowMonitor> monitor);

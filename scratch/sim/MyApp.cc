@@ -12,14 +12,12 @@ NS_LOG_COMPONENT_DEFINE("MyApp");
 
 MyApp::MyApp() = default;
 
-MyApp::~MyApp()
-{
+MyApp::~MyApp() {
     m_socket = nullptr;
 }
 
 void MyApp::Setup(Ptr<Socket> socket, Address address, uint32_t packetSize,
-                  uint32_t nPackets, DataRate dataRate, uint32_t writeSize, uint8_t* data, uint8_t* dataFin)
-{
+                  uint32_t nPackets, DataRate dataRate, uint32_t writeSize, uint8_t* data, uint8_t* dataFin) {
     m_socket = socket;
     m_peer = address;
     m_packetSize = packetSize;
@@ -31,8 +29,7 @@ void MyApp::Setup(Ptr<Socket> socket, Address address, uint32_t packetSize,
     m_writeSize = writeSize;
 }
 
-void MyApp::StartApplication()
-{
+void MyApp::StartApplication() {
     m_running = true;
     m_packetsSent = 0;
 
@@ -45,8 +42,7 @@ void MyApp::StartApplication()
     SendPacket();
 }
 
-void MyApp::StopApplication()
-{
+void MyApp::StopApplication() {
     m_running = false;
 
     if (m_sendEvent.IsPending()) {
@@ -58,13 +54,14 @@ void MyApp::StopApplication()
     }
 }
 
-void MyApp::SendPacket()
-{
+void MyApp::SendPacket() {
     Ptr<Packet> packet = Create<Packet>(m_packetSize);
 
     if (m_packetsSent + 1 == m_nPackets) {
         m_socket->Send(m_data_fin, m_writeSize, 0);
-    } else {
+    }
+
+    else {
         m_socket->Send(m_data, m_writeSize, 0);
     }
 
@@ -75,8 +72,7 @@ void MyApp::SendPacket()
     }
 }
 
-void MyApp::ScheduleTx()
-{
+void MyApp::ScheduleTx() {
     if (m_running) {
         double seconds = static_cast<double>(m_packetSize * 8) / m_dataRate.GetBitRate();
         Time tNext = Seconds(seconds);

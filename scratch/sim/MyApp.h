@@ -10,8 +10,7 @@
 
 using namespace ns3;
 
-class MyApp : public Application
-{
+class MyApp : public Application {
 public:
     MyApp();
     virtual ~MyApp() override;

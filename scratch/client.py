@@ -5,6 +5,7 @@ import os
 import time
 import zlib
 import traceback
+import keras
 
 import numpy as np
 from fastapi import FastAPI
@@ -16,17 +17,6 @@ app = FastAPI()
 executor = None
 os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
 import tensorflow as tf
-def check_gpus():
-    gpus = tf.config.list_physical_devices('GPU')
-    if gpus:
-        print(f"GPUs are available. Number of GPUs: {len(gpus)}")
-        for gpu in gpus:
-            print(f"GPU: {gpu}")
-    else:
-        print("No GPUs found.")
-
-# Run the function to check for GPUs
-check_gpus()
 
 
 RETRY_COUNT = 3  # Number of retries for each client request
@@ -43,23 +33,28 @@ def process_client_request_with_retries(client_request):
             # Call the actual processing function
             process_client_request(client_request)
             print(
-                f"Client {client_request.client_id} completed successfully on attempt {attempt}")
+                f"Client {client_request.client_id} completed successfully on attempt {attempt}"
+            )
             break  # Exit loop if successful
         except Exception as e:
             print(
-                f"Error processing client request {client_request.client_id} on attempt {attempt}: {e}")
+                f"Error processing client request {client_request.client_id} on attempt {attempt}: {e}"
+            )
             traceback.print_exc()
             if attempt == RETRY_COUNT:
                 print(
-                    f"Max retries reached for client {client_request.client_id}. Moving on.")
+                    f"Max retries reached for client {client_request.client_id}. Moving on."
+                )
             else:
                 print(
-                    f"Retrying client {client_request.client_id} in {RETRY_DELAY} seconds...")
+                    f"Retrying client {client_request.client_id} in {RETRY_DELAY} seconds..."
+                )
                 time.sleep(RETRY_DELAY)  # Delay before retry
         finally:
             # Clean up resources to free memory
             import tensorflow as tf  # Import tensorflow inside function scope
-            tf.keras.backend.clear_session()
+
+            keras.backend.clear_session()
             gc.collect()
 
 
@@ -87,14 +82,18 @@ def process_client_request(client_request):
 
     try:
         # Load dataset inside the function
-        (train_images, train_labels), (test_images,
-                                       test_labels) = tf.keras.datasets.fashion_mnist.load_data()
+        (train_images, train_labels), (test_images, test_labels) = (
+            keras.datasets.fashion_mnist.load_data()
+        )
         train_images = train_images[..., np.newaxis] / 255.0
         test_images = test_images[..., np.newaxis] / 255.0
 
         # Create test_dataset
-        test_dataset = tf.data.Dataset.from_tensor_slices(
-            (test_images, test_labels)).batch(64).prefetch(tf.data.AUTOTUNE)
+        test_dataset = (
+            tf.data.Dataset.from_tensor_slices((test_images, test_labels))
+            .batch(64)
+            .prefetch(tf.data.AUTOTUNE)
+        )
 
         def split_data(train_images, train_labels, n_clients, client_id):
             np.random.seed(client_id)
@@ -112,12 +111,14 @@ def process_client_request(client_request):
 
             # Compute class probabilities using Gaussian distribution
             class_labels = np.arange(n_classes)
-            class_probabilities = np.exp(-((class_labels - mu) ** 2) / (2 * sigma ** 2))
+            class_probabilities = np.exp(-((class_labels - mu) ** 2) / (2 * sigma**2))
             class_probabilities += 1e-6  # Avoid zeros
             class_probabilities /= np.sum(class_probabilities)  # Normalize to sum to 1
 
             # Compute number of samples per class for this client
-            num_samples_per_class = (class_probabilities * samples_per_client).astype(int)
+            num_samples_per_class = (class_probabilities * samples_per_client).astype(
+                int
+            )
 
             # Ensure at least one sample per class
             num_samples_per_class[num_samples_per_class == 0] = 1
@@ -150,87 +151,71 @@ def process_client_request(client_request):
             # Return the data for this client
             return train_images[client_indices], train_labels[client_indices]
 
-        # def split_data(train_images, train_labels, n_clients, client_id, non_iid_factor=0.2):
-        #     np.random.seed(client_id)
-        #     unique_classes = np.unique(train_labels)
-        #     n_classes = len(unique_classes)
-        #     data_size = len(train_images)
-        #     chunk_size = data_size // n_clients
-
-        #     if non_iid_factor == 0:
-        #         # IID split
-        #         start_index = client_id * chunk_size
-        #         end_index = data_size if client_id == n_clients - \
-        #             1 else (client_id + 1) * chunk_size
-        #         return train_images[start_index:end_index], train_labels[start_index:end_index]
-        #     else:
-        #         # Non-IID split
-        #         class_indices = [np.where(train_labels == c)[0]
-        #                          for c in unique_classes]
-        #         n_classes_per_client = max(
-        #             1, int((1 - non_iid_factor) * n_classes))
-        #         selected_classes = np.random.choice(
-        #             unique_classes, size=n_classes_per_client, replace=False)
-        #         print(f"client {client_id} classes: {selected_classes}")
-
-        #         client_indices = []
-        #         for cls in selected_classes:
-        #             class_idx = class_indices[cls]
-        #             np.random.shuffle(class_idx)
-        #             num_samples_for_class = int(
-        #                 (non_iid_factor + 1) * len(class_idx) / n_clients)
-        #             client_indices.extend(class_idx[:num_samples_for_class])
-
-        #         np.random.shuffle(client_indices)
-        #         client_data_indices = np.array_split(
-        #             client_indices, n_clients)[client_id]
-        #         return train_images[client_data_indices], train_labels[client_data_indices]
 
         def load_model_from_file(model_filename):
             if os.path.exists(model_filename):
                 print(f"Loading model from {model_filename}")
-                return tf.keras.models.load_model(model_filename)
+                return keras.models.load_model(model_filename)
             else:
                 print(
-                    f"Model file {model_filename} does not exist. Creating a new model.")
-                model = tf.keras.Sequential([
-                    tf.keras.layers.Conv2D(
-                        64, (3, 3), padding="same", activation="relu", input_shape=(28, 28, 1)),
-                    tf.keras.layers.BatchNormalization(),
-                    tf.keras.layers.Conv2D(
-                        64, (3, 3), padding="same", activation="relu"),
-                    tf.keras.layers.BatchNormalization(),
-                    tf.keras.layers.MaxPooling2D((2, 2)),
-                    tf.keras.layers.Dropout(0.25),
-                    tf.keras.layers.Conv2D(
-                        128, (3, 3), padding="same", activation="relu"),
-                    tf.keras.layers.BatchNormalization(),
-                    tf.keras.layers.Conv2D(
-                        128, (3, 3), padding="same", activation="relu"),
-                    tf.keras.layers.BatchNormalization(),
-                    tf.keras.layers.MaxPooling2D((2, 2)),
-                    tf.keras.layers.Dropout(0.25),
-                    tf.keras.layers.Flatten(),
-                    tf.keras.layers.Dense(256, activation="relu"),
-                    tf.keras.layers.Dropout(0.25),
-                    tf.keras.layers.BatchNormalization(),
-                    tf.keras.layers.Dense(128, activation="relu"),
-                    tf.keras.layers.Dropout(0.25),
-                    tf.keras.layers.BatchNormalization(),
-                    tf.keras.layers.Dense(10, activation="softmax"),
-                ])
+                    f"Model file {model_filename} does not exist. Creating a new model."
+                )
+                model = keras.Sequential(
+                    [
+                        keras.layers.Conv2D(
+                            64,
+                            (3, 3),
+                            padding="same",
+                            activation="relu",
+                            input_shape=(28, 28, 1),
+                        ),
+                        keras.layers.BatchNormalization(),
+                        keras.layers.Conv2D(
+                            64, (3, 3), padding="same", activation="relu"
+                        ),
+                        keras.layers.BatchNormalization(),
+                        keras.layers.MaxPooling2D((2, 2)),
+                        keras.layers.Dropout(0.25),
+                        keras.layers.Conv2D(
+                            128, (3, 3), padding="same", activation="relu"
+                        ),
+                        keras.layers.BatchNormalization(),
+                        keras.layers.Conv2D(
+                            128, (3, 3), padding="same", activation="relu"
+                        ),
+                        keras.layers.BatchNormalization(),
+                        keras.layers.MaxPooling2D((2, 2)),
+                        keras.layers.Dropout(0.25),
+                        keras.layers.Flatten(),
+                        keras.layers.Dense(256, activation="relu"),
+                        keras.layers.Dropout(0.25),
+                        keras.layers.BatchNormalization(),
+                        keras.layers.Dense(128, activation="relu"),
+                        keras.layers.Dropout(0.25),
+                        keras.layers.BatchNormalization(),
+                        keras.layers.Dense(10, activation="softmax"),
+                    ]
+                )
                 return model
 
         def get_dataset(images, labels, batch_size=64):
             dataset = tf.data.Dataset.from_tensor_slices((images, labels))
-            dataset = dataset.shuffle(buffer_size=10000).batch(
-                batch_size).prefetch(tf.data.AUTOTUNE)
+            dataset = (
+                dataset.shuffle(buffer_size=10000)
+                .batch(batch_size)
+                .prefetch(tf.data.AUTOTUNE)
+            )
             return dataset
 
         def train_model(model, train_dataset, test_dataset, epochs=10):
             model.compile(
-                optimizer="adam", loss="sparse_categorical_crossentropy", metrics=["accuracy"])
-            return model.fit(train_dataset, epochs=epochs, validation_data=test_dataset, verbose=2)
+                optimizer="adam",
+                loss="sparse_categorical_crossentropy",
+                metrics=["accuracy"],
+            )
+            return model.fit(
+                train_dataset, epochs=epochs, validation_data=test_dataset, verbose=2
+            )
 
         def quantize_weights(weights, quantization_levels=256):
             quantized_weights = []
@@ -241,8 +226,10 @@ def process_client_request(client_request):
                     quantized_layer = layer_weights
                 else:
                     step_size = (max_val - min_val) / (quantization_levels - 1)
-                    quantized_layer = np.round(
-                        (layer_weights - min_val) / step_size) * step_size + min_val
+                    quantized_layer = (
+                        np.round((layer_weights - min_val) / step_size) * step_size
+                        + min_val
+                    )
                 quantized_weights.append(quantized_layer.astype(np.float32))
             return quantized_weights
 
@@ -251,9 +238,11 @@ def process_client_request(client_request):
             for layer_weights in weights:
                 if layer_weights.ndim > 0:
                     threshold = np.percentile(
-                        np.abs(layer_weights), pruning_percentage * 100)
+                        np.abs(layer_weights), pruning_percentage * 100
+                    )
                     pruned_layer_weights = np.where(
-                        np.abs(layer_weights) < threshold, 0, layer_weights)
+                        np.abs(layer_weights) < threshold, 0, layer_weights
+                    )
                     pruned_weights.append(pruned_layer_weights)
                 else:
                     pruned_weights.append(layer_weights)
@@ -267,12 +256,12 @@ def process_client_request(client_request):
                 compressed_weights.append(compressed_layer_weights)
             return compressed_weights
 
-        def get_weights(model: tf.keras.models.Model):
+        def get_weights(model: keras.models.Model):
             return model.get_weights()
 
         def save_compressed_top_n_layers(model, top_n_layers, output_filename):
             try:
-                new_model = tf.keras.models.Sequential(top_n_layers)
+                new_model = keras.models.Sequential(top_n_layers)
             except:
                 new_model = model
             new_model_weights = get_weights(new_model)
@@ -287,7 +276,9 @@ def process_client_request(client_request):
                 for compressed_weights in compressed_weights_list:
                     f.write(compressed_weights)
 
-        def rank_model_layers(model, test_dataset, subset_size=1000, batch_size=64, max_workers=4):
+        def rank_model_layers(
+            model, test_dataset, subset_size=1000, batch_size=64, max_workers=4
+        ):
             # Use a subset of the test dataset
             test_dataset_subset = test_dataset.take(subset_size // batch_size)
             base_accuracy = model.evaluate(test_dataset_subset, verbose=0)[1]
@@ -299,8 +290,7 @@ def process_client_request(client_request):
 
                 zeroed_weights = [np.zeros_like(w) for w in original_weights]
                 layer.set_weights(zeroed_weights)
-                perturbed_accuracy = model.evaluate(
-                    test_dataset_subset, verbose=0)[1]
+                perturbed_accuracy = model.evaluate(test_dataset_subset, verbose=0)[1]
                 accuracy_drop = base_accuracy - perturbed_accuracy
                 layer.set_weights(original_weights)
 
@@ -310,9 +300,13 @@ def process_client_request(client_request):
                 return i, layer.name, accuracy_drop
 
             layer_impact = []
-            with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-                futures = [executor.submit(
-                    evaluate_layer_impact, i, layer) for i, layer in enumerate(model.layers)]
+            with concurrent.futures.ThreadPoolExecutor(
+                max_workers=max_workers
+            ) as executor:
+                futures = [
+                    executor.submit(evaluate_layer_impact, i, layer)
+                    for i, layer in enumerate(model.layers)
+                ]
                 for future in concurrent.futures.as_completed(futures):
                     layer_impact.append(future.result())
 
@@ -323,7 +317,10 @@ def process_client_request(client_request):
         model = load_model_from_file(client_request.model)
 
         train_images_chunk, train_labels_chunk = split_data(
-            train_images, train_labels, client_request.n_clients, client_request.client_id
+            train_images,
+            train_labels,
+            client_request.n_clients,
+            client_request.client_id,
         )
 
         train_dataset = get_dataset(train_images_chunk, train_labels_chunk)
@@ -352,19 +349,19 @@ def process_client_request(client_request):
         uncompressed_size = os.path.getsize(client_request.model)
 
         time_to_rank_start = time.time()
-        layer_importances = rank_model_layers(
-            model, test_dataset, batch_size=64)
+        layer_importances = rank_model_layers(model, test_dataset, batch_size=64)
         time_to_rank_end = time.time()
-        print(
-            f"Ranking layers took {time_to_rank_end - time_to_rank_start} seconds")
+        print(f"Ranking layers took {time_to_rank_end - time_to_rank_start} seconds")
 
         top_n_layers = [
-            model.layers[layer_index] for layer_index, _, _ in layer_importances[: client_request.top_n]
+            model.layers[layer_index]
+            for layer_index, _, _ in layer_importances[: client_request.top_n]
         ]
         top_n_output_filename = f"{client_request.model.split('.')[0]}_top_{client_request.top_n}_layers.tflite"
-        
+
         compressed_top_n_size = save_compressed_top_n_layers(
-            model, top_n_layers, top_n_output_filename)
+            model, top_n_layers, top_n_output_filename
+        )
 
         results = {
             "uncompressed_size": uncompressed_size,
@@ -388,12 +385,11 @@ def process_client_request(client_request):
         print(f"Client {client_request.client_id} completed training.")
 
     except Exception as e:
-        print(
-            f"Error processing client request {client_request.client_id}: {e}")
+        print(f"Error processing client request {client_request.client_id}: {e}")
         traceback.print_exc()
     finally:
         # Clean up resources to free memory
-        tf.keras.backend.clear_session()
+        keras.backend.clear_session()
         gc.collect()
 
 
@@ -410,7 +406,7 @@ if __name__ == "__main__":
     import multiprocessing
 
     # Set the multiprocessing start method to 'spawn'
-    multiprocessing.set_start_method('spawn', force=True)
+    multiprocessing.set_start_method("spawn", force=True)
 
     # Initialize the executor after setting the start method
     executor = concurrent.futures.ProcessPoolExecutor(max_workers=6)
