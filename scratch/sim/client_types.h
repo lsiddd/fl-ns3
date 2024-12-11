@@ -8,8 +8,6 @@
 #include "ns3/isotropic-antenna-model.h"
 #include "ns3/lte-helper.h"
 #include "ns3/lte-module.h"
-#include "ns3/mmwave-helper.h"
-#include "ns3/mmwave-point-to-point-epc-helper.h"
 #include "ns3/mobility-module.h"
 #include "ns3/netanim-module.h"
 #include "ns3/point-to-point-helper.h"

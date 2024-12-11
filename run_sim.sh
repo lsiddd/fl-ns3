@@ -76,8 +76,8 @@ for num_ues in "${ues_values[@]}"; do
         sleep 2
         kill -9 $client_pid 2>/dev/null || true
 
-        # Wait for client to finish
-        wait $client_pid 2>/dev/null || true
+        # if it's still a bit stubborn
+        pkill -9 python
 
         # Move generated files to the directory for this run
         mv metrics* "$run_dir/" 2>/dev/null || true
