@@ -59,7 +59,7 @@ std::vector<NodesIps>nodeToIps() {
     return nodes_ips;
 }
 
-void RxCallback(const std::string path, Ptr<const Packet> packet, const Address& from) {
+void sinkRxCallback(Ptr<const Packet> packet, const Address& from) {
     uint32_t packetSize = packet->GetSize();
     std::vector<uint8_t> buffer(packetSize);
     packet->CopyData(buffer.data(), packetSize);
@@ -99,6 +99,9 @@ void sendStream(Ptr<Node> sendingNode, Ptr<Node> receivingNode, int size) {
                                       InetSocketAddress(Ipv4Address::GetAny(), port));
     ApplicationContainer sinkApps = packetSinkHelper.Install(receivingNode);
     sinkApps.Start(Seconds(0.1));
+    // Connect the callback for when packets are received at the sink
+    Ptr<PacketSink> sink = DynamicCast<PacketSink>(sinkApps.Get(0));
+    sink->TraceConnectWithoutContext("Rx", MakeCallback(&sinkRxCallback));
     // Create the sending socket
     Ptr<Socket> ns3TcpSocket = Socket::CreateSocket(sendingNode, TcpSocketFactory::GetTypeId());
 
@@ -120,8 +123,6 @@ void sendStream(Ptr<Node> sendingNode, Ptr<Node> receivingNode, int size) {
     // Schedule the start and stop times for the application
     app->SetStartTime(Seconds(0.5));
     // app->SetStopTime(Seconds(simStopTime));  // Assuming simStopTime is declared globally
-    // Connect the callback for when packets are received at the sink
-    Config::Connect("/NodeList/*/ApplicationList/*/$ns3::PacketSink/Rx", MakeCallback(&RxCallback));
 }
 
 // Utility Functions ==================================

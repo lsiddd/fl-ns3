@@ -55,8 +55,6 @@ void MyApp::StopApplication() {
 }
 
 void MyApp::SendPacket() {
-    Ptr<Packet> packet = Create<Packet>(m_packetSize);
-
     if (m_packetsSent + 1 == m_nPackets) {
         m_socket->Send(m_data_fin, m_writeSize, 0);
     }
