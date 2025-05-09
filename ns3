@@ -1055,8 +1055,22 @@ def get_program_shortcuts(build_profile, ns3_version):
 
 
 def parse_version(version_str):
-    version = version_str.split(".")
-    version = tuple(map(int, version))
+    components = version_str.split(".")
+    numeric_components = []
+    for component in components:
+        # Extract leading digits from the component
+        # This handles cases like "1-dirty" by taking "1"
+        match = re.match(r"(\d+)", component)
+        if match:
+            numeric_components.append(match.group(1))
+        else:
+            # If a component (e.g., "beta" in "3.10.beta") doesn't start with a digit,
+            # it's not suitable for numeric tuple comparison as expected by this script.
+            raise ValueError(
+                f"Version component '{component}' in '{version_str}' does not start with a digit."
+            )
+    
+    version = tuple(map(int, numeric_components))
     return version
 
 
