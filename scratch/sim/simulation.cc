@@ -1,12 +1,13 @@
+// Filename: scratch/sim/simulation.cc
 // Macro for logging
 #define LOG(x) std::cout << x << std::endl
 
 // Project-specific headers
 #include "MyApp.h"
 #include "client_types.h"
+#include "dataframe.h"
 #include "notifications.h"
 #include "utils.h"
-#include "dataframe.h"
 
 // External library headers
 #include "json.hpp"
@@ -15,16 +16,19 @@
 #include "ns3/applications-module.h"
 #include "ns3/command-line.h"
 #include "ns3/config-store-module.h"
+#include "ns3/core-module.h" // Required for Simulator::Schedule
 #include "ns3/flow-monitor-module.h"
 #include "ns3/internet-module.h"
 #include "ns3/isotropic-antenna-model.h"
 #include "ns3/lte-helper.h"
 #include "ns3/lte-module.h"
+#include "ns3/lte-ue-rrc.h" // Make sure LteUeRrc is included
 #include "ns3/mobility-module.h"
 #include "ns3/netanim-module.h"
 #include "ns3/point-to-point-helper.h"
 
 // Standard Library headers
+#include <algorithm>
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
@@ -34,11 +38,11 @@
 #include <map>
 #include <random>
 #include <sstream>
+#include <string>
 #include <thread>
-#include <unistd.h>
-#include <vector>
-#include <algorithm>
 #include <tuple>
+#include <unistd.h> // For sleep
+#include <vector>
 
 // Using declarations for convenience
 using namespace ns3;
@@ -49,11 +53,19 @@ NS_LOG_COMPONENT_DEFINE("Simulation");
 
 // Global constants
 static constexpr double simStopTime = 1200.0;
-static constexpr int numberOfUes = 20;
-static constexpr int numberOfEnbs = 5;
-static constexpr int numberOfParticipatingClients = numberOfUes;
+static constexpr int numberOfUes = 10; // Reduced for faster testing
+static constexpr int numberOfEnbs = 2; // Reduced for faster testing
+static constexpr int numberOfParticipatingClients =
+    5; // Max clients per round for FL
 static constexpr int scenarioSize = 1000;
-std::string algorithm = "weighted_fedavg";
+std::string algorithm = "fedavg"; // This will map to FL API's aggregation if
+                                  // needed, but /run_round uses its own.
+
+// Python FL API settings
+const std::string FL_API_BASE_URL = "http://127.0.0.1:5000";
+const int FL_API_NUM_CLIENTS = numberOfUes; // Tell FL API about the total UEs
+const int FL_API_CLIENTS_PER_ROUND =
+    numberOfParticipatingClients; // How many ns-3 selects to tell FL API
 
 DataFrame accuracy_df;
 DataFrame participation_df;
@@ -77,790 +89,731 @@ FlowMonitorHelper flowmon;
 
 // Data structure for tracking various metrics
 std::map<Ipv4Address, double> endOfStreamTimes;
-std::map<Ptr<Node>, int> nodeModelSize, nodeTrainingTime;
+// std::map<Ptr<Node>, int> nodeModelSize, nodeTrainingTime; // These will be
+// populated differently
 std::map<uint16_t, std::map<uint16_t, double>> sinrUe;
 std::map<uint16_t, std::map<uint16_t, double>> rsrpUe;
 
 // Global state variables
 static bool roundFinished = true;
 static int roundNumber = 0;
+static bool fl_api_initialized = false;
 
 // Client-related information
 std::vector<NodesIps> nodesIPs;
-std::vector<ClientModels> clientsInfo;
-std::vector<ClientModels> selectedClients;
+std::vector<ClientModels>
+    clientsInfoGlobal; // Holds info for all potential clients
+std::vector<ClientModels>
+    selectedClientsForCurrentRound; // Clients selected by ns-3 for current
+                                    // round
 
 // Timeout for certain operations
-Time timeout = Seconds(120);
-static double constexpr managerInterval = 0.1;
+Time timeout = Seconds(120); // ns-3 round timeout for model transfers
+static double constexpr managerInterval =
+    0.1; // ns-3 manager check interval, make it larger e.g. 1.0
+
+// --- Helper function to call Python API ---
+// Returns the HTTP status code and optionally saves response to a file
+int callPythonApi(const std::string &endpoint,
+                  const std::string &method = "POST",
+                  const std::string &data = "",
+                  const std::string &output_file = "") {
+  std::stringstream command;
+  command << "curl --max-time 20 --connect-timeout 5 -s -o "; // Max 20s total,
+                                                              // 5s to connect
+  if (output_file.empty()) {
+    command << "/dev/null";
+  } else {
+    command << output_file;
+  }
+  command << " -w \"%{http_code}\""; // Output only HTTP status code to stdout
+
+  if (!method.empty()) {
+    command << " -X " << method;
+  }
+  if (method == "POST" && !data.empty()) {
+    command << " -H \"Content-Type: application/json\" -d '" << data << "'";
+  }
+  command << " " << FL_API_BASE_URL << endpoint;
+
+  LOG("callPythonApi: PREPARING to execute CURL for endpoint "
+      << endpoint << " at " << Simulator::Now().GetSeconds()
+      << "s. Command: " << command.str());
+
+  std::fflush(stdout); // Force flush output before potentially blocking popen
+
+  char buffer[128];
+  std::string result_str = "";
+  FILE *pipe = popen(command.str().c_str(), "r");
+  if (!pipe) {
+    LOG("ERROR: popen() FAILED for command: "
+        << command.str() << " at " << Simulator::Now().GetSeconds() << "s.");
+    std::fflush(stdout);
+    return -1;
+  }
+  LOG("callPythonApi: popen successful, READING from pipe for "
+      << endpoint << " at " << Simulator::Now().GetSeconds() << "s.");
+  std::fflush(stdout);
+  try {
+    while (fgets(buffer, sizeof(buffer), pipe) != nullptr) {
+      result_str += buffer;
+    }
+  }
+
+  catch (const std::exception &e) {
+    LOG("ERROR: Exception while reading from pipe for "
+        << endpoint << ": " << e.what() << " at "
+        << Simulator::Now().GetSeconds() << "s.");
+    std::fflush(stdout);
+    pclose(pipe);
+    return -2;
+  } catch (...) {
+    LOG("ERROR: Unknown exception while reading from pipe for "
+        << endpoint << " at " << Simulator::Now().GetSeconds() << "s.");
+    std::fflush(stdout);
+    pclose(pipe);
+    return -3;
+  }
+
+  LOG("callPythonApi: FINISHED reading from pipe for "
+      << endpoint << ". Raw result_str: '" << result_str << "'"
+      << " at " << Simulator::Now().GetSeconds() << "s.");
+  std::fflush(stdout);
+
+  int status = pclose(pipe);
+  LOG("callPythonApi: pclose status for "
+      << endpoint << ": " << status << " at " << Simulator::Now().GetSeconds()
+      << "s.");
+  std::fflush(stdout);
+
+  //   catch (...) {
+  //     pclose(pipe);
+  //     LOG("ERROR: Exception while reading from pipe");
+  //     return -1;
+  //   }
+  //   int status = pclose(pipe);
+  if (status == -1) {
+    LOG("ERROR: pclose failed or command not found. Status: " << status);
+    return -1;
+  } else if (WIFEXITED(status) && WEXITSTATUS(status) != 0) {
+    LOG("ERROR: Curl command exited with status "
+        << WEXITSTATUS(status) << ". HTTP code: " << result_str);
+    // result_str might contain the http code even if curl itself had an error
+    // code (e.g. connection refused)
+  }
+
+  try {
+    return std::stoi(result_str);
+  } catch (const std::invalid_argument &ia) {
+    LOG("ERROR: Invalid argument for stoi: '" << result_str << "'");
+    return -1; // Or some other error code
+  } catch (const std::out_of_range &oor) {
+    LOG("ERROR: Out of range for stoi: '" << result_str << "'");
+    return -1; // Or some other error code
+  }
+}
 
 void initializeDataFrames() {
-    // List of columns for accuracy_df
-    std::vector<std::string> accuracy_columns = {
-        "time", "user", "round", "accuracy", "compressed_size",
-        "compressed_top_n_size", "duration", "loss",
-        "number_of_samples", "uncompressed_size", "val_accuracy", "val_loss"
-    };
+  std::vector<std::string> accuracy_columns = {"time",
+                                               "round",
+                                               "global_accuracy",
+                                               "global_loss",
+                                               "avg_client_accuracy",
+                                               "avg_client_loss",
+                                               "api_round_duration"};
+  std::vector<std::string> participation_columns = {
+      "time", "round", "selected_in_ns3", "participated_in_ns3_comms"};
+  std::vector<std::string> throughput_columns = {"time", "tx_throughput",
+                                                 "rx_throughput"};
 
-    // List of columns for participation_df
-    std::vector<std::string> participation_columns = {
-        "time", "participating", "total"
-    };
-
-    // List of columns for throughput_df
-    std::vector<std::string> throughput_columns = {
-        "time", "tx_throughput", "rx_throughput"
-    };
-
-    // Initialize columns for accuracy_df
-    for (const auto& column : accuracy_columns) {
-        accuracy_df.addColumn(column);
-    }
-
-    // Initialize columns for participation_df
-    for (const auto& column : participation_columns) {
-        participation_df.addColumn(column);
-    }
-
-    // Initialize columns for throughput_df
-    for (const auto& column : throughput_columns) {
-        throughput_df.addColumn(column);
-    }
+  for (const auto &column : accuracy_columns)
+    accuracy_df.addColumn(column);
+  for (const auto &column : participation_columns)
+    participation_df.addColumn(column);
+  for (const auto &column : throughput_columns)
+    throughput_df.addColumn(column);
 }
 
 std::pair<double, double> getRsrpSinr(uint32_t nodeIdx) {
-    // Retrieve the UE device for the given node index
-    Ptr<NetDevice> ueDevice = ueDevs.Get(nodeIdx);
+  Ptr<NetDevice> ueDevice = ueDevs.Get(nodeIdx);
+  if (!ueDevice)
+    return {0.0, 0.0};
+  auto lteUeNetDevice = ueDevice->GetObject<LteUeNetDevice>();
+  if (!lteUeNetDevice)
+    return {0.0, 0.0};
+  auto rrc = lteUeNetDevice->GetRrc();
+  // if (!rrc || !rrc->IsConnected()) return {0.0, 0.0}; // Check if RRC is
+  // valid and connected
 
-    // Retrieve the LTE UE net device object and RRC instance
-    auto lteUeNetDevice = ueDevice->GetObject<LteUeNetDevice>();
-    auto rrc = lteUeNetDevice->GetRrc();
+  if (!rrc || (rrc->GetState() != LteUeRrc::CONNECTED_NORMALLY &&
+               rrc->GetState() != LteUeRrc::CONNECTED_HANDOVER)) {
+    // Alternative check: if (!rrc || rrc->GetRnti() ==
+    // LteUeRrc::UNINITIALIZED_RNTI)
+    return {0.0, 0.0}; // Not connected or RRC not available
+  }
+  auto rnti = rrc->GetRnti();
+  auto cellId = rrc->GetCellId();
 
-    // Extract the RNTI and Cell ID from the RRC instance
-    auto rnti = rrc->GetRnti();
-    auto cellId = rrc->GetCellId();
-
-    // Retrieve RSRP and SINR for the given cell ID and RNTI
-    double rsrp = rsrpUe[cellId][rnti];
-    double sinr = sinrUe[cellId][rnti];
-
-    // Return the RSRP and SINR as a pair
-    return {rsrp, sinr};
+  double rsrp = 0.0;
+  double sinr = 0.0;
+  if (rsrpUe.count(cellId) && rsrpUe[cellId].count(rnti)) {
+    rsrp = rsrpUe[cellId][rnti];
+  }
+  if (sinrUe.count(cellId) && sinrUe[cellId].count(rnti)) {
+    sinr = sinrUe[cellId][rnti];
+  }
+  return {rsrp, sinr};
 }
 
-// Helper function to check if a file exists
-bool fileExists(const std::string &filename) {
-    if (!std::filesystem::exists(filename)) {
-        // std::cerr << "Error: File does not exist: " << filename << std::endl;
+// Fills clientsInfoGlobal with current data for ALL UEs
+void updateAllClientsGlobalInfo() {
+  clientsInfoGlobal.clear();
+  const int defaultTrainingTime =
+      5000; // ms, time ns-3 client "prepares" before sending
+  const int defaultModelSizeBytes =
+      2000000; // 2MB, placeholder for client model update size
+
+  for (uint32_t i = 0; i < ueNodes.GetN(); ++i) {
+    auto [rsrp, sinr] = getRsrpSinr(i);
+    // Accuracy here is a placeholder or could be from a previous global round
+    // Python API will handle actual accuracies.
+    double placeholderAccuracy = 0.1;
+    clientsInfoGlobal.emplace_back(ueNodes.Get(i), defaultTrainingTime,
+                                   defaultModelSizeBytes, rsrp, sinr,
+                                   placeholderAccuracy);
+  }
+}
+
+// Selects clients based on ns-3 criteria for the current round
+// Populates `selectedClientsForCurrentRound`
+void selectNs3ManagedClients(int n_to_select) {
+  selectedClientsForCurrentRound.clear();
+  updateAllClientsGlobalInfo(); // Ensure clientsInfoGlobal is up-to-date with
+                                // SINR/RSRP
+
+  // Example: Select top N by SINR (can be random, or your other existing
+  // FedAvg/FedProx selections) For simplicity, let's use a SINR-based selection
+  // similar to your 'clientSelectionSinr' but operating on clientsInfoGlobal
+  // and populating selectedClientsForCurrentRound.
+
+  std::vector<ClientModels> candidates = clientsInfoGlobal; // Copy
+  std::sort(candidates.begin(), candidates.end(),
+            [](const ClientModels &a, const ClientModels &b) {
+              return a.sinr > b.sinr; // Higher SINR is better
+            });
+
+  for (int i = 0; i < n_to_select && (long unsigned int)i < candidates.size();
+       ++i) {
+    ClientModels selected_client = candidates[i];
+    selected_client.selected =
+        true; // Mark as selected for ns-3 comms simulation
+    selectedClientsForCurrentRound.push_back(selected_client);
+  }
+  LOG("ns-3 selected " << selectedClientsForCurrentRound.size()
+                       << " clients for FL round " << roundNumber);
+}
+
+// This function is now responsible for:
+// 1. Telling Python API which clients ns-3 has selected.
+// 2. Python API runs the full FL round (training + aggregation).
+// 3. Logging results from Python API.
+// 4. Preparing for ns-3 to simulate model uploads from these selected clients.
+bool triggerAndProcessFLRoundInApi() {
+  LOG("=================== Triggering FL Round "
+      << roundNumber << " in Python API at " << Simulator::Now().GetSeconds()
+      << "s ===================");
+  std::fflush(stdout); // Ensure log is flushed
+
+  if (selectedClientsForCurrentRound.empty() &&
+      FL_API_CLIENTS_PER_ROUND >
+          0) // Check if ns-3 wants to select but couldn't
+  {
+    LOG("No clients were selected by ns-3 for this round. Skipping API call "
+        "for /run_round.");
+    std::fflush(stdout);
+    // If no clients are selected by ns-3, we might still want to "complete" the
+    // API part of the round or decide that the API round shouldn't run. For
+    // now, let's assume if ns-3 selects 0, the API round for training is
+    // skipped for these 0. The Python API itself, if called with an empty
+    // client_indices, will sample its own. This behavior needs to be aligned.
+    // Let's assume for now we only proceed if ns-3 selected clients.
+    if (FL_API_CLIENTS_PER_ROUND > 0)
+      return false; // No clients to send to API for training
+  }
+
+  // TEST CALL FOR ROUND 2
+  if (roundNumber == 2) {
+    LOG("Attempting a TEST CURL to /ping before FL API round 2 /run_round call "
+        "at "
+        << Simulator::Now().GetSeconds() << "s");
+    std::fflush(stdout);
+    int test_http_code = callPythonApi("/ping", "GET", "", "ping_response.txt");
+    LOG("TEST /ping call HTTP code: " << test_http_code << " at "
+                                      << Simulator::Now().GetSeconds() << "s");
+    std::fflush(stdout);
+    if (test_http_code != 200) {
+      LOG("ERROR: Test /ping call FAILED. Aborting before /run_round for round "
+          "2.");
+      std::fflush(stdout);
+      return false; // Indicate failure
+    }
+  }
+
+  json client_indices_payload;
+  std::vector<int> indices_list;
+  // Only add client.node->GetId() which is uint32_t. The Python API expects
+  // int.
+  for (const auto &client : selectedClientsForCurrentRound) {
+    indices_list.push_back(static_cast<int>(client.node->GetId()));
+  }
+  client_indices_payload["client_indices"] = indices_list;
+
+  std::string response_file = "fl_round_response.json";
+  LOG("Calling /run_round for round "
+      << roundNumber << " with payload: " << client_indices_payload.dump());
+  std::fflush(stdout);
+  int http_code = callPythonApi("/run_round", "POST",
+                                client_indices_payload.dump(), response_file);
+
+  if (http_code == 200) {
+    LOG("Python API /run_round call successful for round " << roundNumber);
+    std::ifstream ifs(response_file);
+    if (ifs.is_open()) {
+      json response_json;
+      try {
+        ifs >> response_json;
+        LOG("Python API Response: " << response_json.dump(2));
+        // Log metrics to accuracy_df
+        accuracy_df.addRow(
+            {Simulator::Now().GetSeconds(), roundNumber,
+             response_json.value("global_test_accuracy", 0.0),
+             response_json.value("global_test_loss", 0.0),
+             response_json.value("avg_client_accuracy", 0.0),
+             response_json.value("avg_client_loss", 0.0),
+             response_json.value("round_duration_seconds", 0.0)});
+      } catch (json::parse_error &e) {
+        LOG("ERROR: Failed to parse Python API response JSON: " << e.what());
         return false;
+      }
+    } else {
+      LOG("ERROR: Could not open response file: " << response_file);
+      return false;
     }
     return true;
+  } else {
+    LOG("ERROR: Python API /run_round call failed. HTTP Code: " << http_code);
+    std::ifstream ifs(response_file);
+    if (ifs.is_open()) {
+      json error_json;
+      try {
+        ifs >> error_json;
+        LOG("Python API Error Response: " << error_json.dump(2));
+      } catch (json::parse_error &e) {
+        LOG("ERROR: Failed to parse Python API error JSON: " << e.what());
+      }
+    }
+    return false;
+  }
 }
 
-// Helper function to parse JSON file
-json parseJsonFile(const std::string &filepath) {
-    std::ifstream ifs(filepath);
-    if (!ifs.is_open()) {
-        std::cerr << "Error: Failed to open file: " << filepath << std::endl;
-        throw std::runtime_error("File not found or cannot be opened");
-    }
+void sendModelsToServer() { // Uses selectedClientsForCurrentRound
+  LOG("ns-3: Simulating model uploads for selected clients.");
+  for (const auto &client_model_info : selectedClientsForCurrentRound) {
+    // .selected flag is already true from selectNs3ManagedClients
+    // nodeModelSize and nodeTrainingTime are from clientsInfoGlobal (default
+    // values)
+    LOG("Client " << client_model_info.node->GetId()
+                  << " scheduling ns-3 send model of size "
+                  << client_model_info.nodeModelSize << " bytes "
+                  << "after " << client_model_info.nodeTrainingTime
+                  << "ms pseudo-training time.");
 
-    try {
-        json j;
-        ifs >> j;  // Parse JSON from the file
-        return j;
-    } catch (const json::parse_error& e) {
-        std::cerr << "Error: Failed to parse JSON from file " << filepath
-                  << " - " << e.what() << std::endl;
-        throw std::runtime_error("JSON parsing error");
-    }
+    Simulator::Schedule(MilliSeconds(client_model_info.nodeTrainingTime),
+                        &sendStream, client_model_info.node,
+                        remoteHostContainer.Get(0),
+                        client_model_info.nodeModelSize);
+  }
 }
 
-
-
-int getCompressionFactor() {
-    if (algorithm == "fedavg") {
-        return 1;
-    } else if (algorithm == "fedprox") {
-        return 2;
-    } else if (algorithm == "weighted_fedavg") {
-        return 1.5;
-    } else if (algorithm == "pruned_fedavg") {
-        return 3;
-    }
-    return 1;  // Default factor
-}
-
-void simulateDummyTraining(std::vector<ClientModels>& clientsInfo) {
-    const int nodeTrainingTime = 5000;  // Constant training time of 5 seconds
-    const int bytes = 22910076;         // Base uncompressed model size
-
-    for (uint32_t i = 0; i < ueNodes.GetN(); ++i) {
-        auto [rsrp, sinr] = getRsrpSinr(i);
-        double dummyAcc = 0.8;
-        clientsInfo.emplace_back(ueNodes.Get(i), nodeTrainingTime, bytes, rsrp, sinr, dummyAcc);
-    }
-}
-
-void issueTrainingRequests() {
-    for (uint32_t i = 0; i < ueNodes.GetN(); ++i) {
-        std::stringstream cmd;
-        cmd << "curl -X POST \"http://127.0.0.1:8182/train\" -H \"Content-Type: application/json\" -d '{"
-            << "\"n_clients\": " << ueNodes.GetN() << ", "
-            << "\"client_id\": " << i << ", "
-            << "\"epochs\": 1, "
-            << "\"model\": \"models/" << ueNodes.Get(i) << ".keras\", "
-            << "\"top_n\": 3, "
-            << "\"algorithm\": \"" << algorithm << "\"}'";
-
-        LOG(cmd.str());  // Log the command
-        int ret = system(cmd.str().c_str());  // Execute the command
-
-        if (ret != 0) {
-            LOG("Command failed with return code: " << ret);
-        }
-    }
-}
-
-
-void waitForFile(const std::string& filename) {
-    while (!fileExists(filename)) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(200));
-    }
-}
-
-int getBaseModelSize(uint32_t i) {
-    std::stringstream modelFile;
-    modelFile << "models/" << ueNodes.Get(i) << ".keras";
-    int baseModelSize = getFileSize(modelFile.str());
-    return baseModelSize / 2;  // Default to uncompressed size
-}
-
-int applyAlgorithmSpecificAdjustments(json& j, int baseModelSize, double fedproxMu, int compressionFactor, double sinr, uint32_t i) {
-    int adjustedModelSize = j["compressed_size"];
-
-    if (algorithm == "fedprox") {
-        adjustedModelSize = static_cast<int>(baseModelSize / compressionFactor);
-    } else if (algorithm == "weighted_fedavg") {
-        double client_weight = sinr / 100.0;
-        adjustedModelSize = static_cast<int>(baseModelSize / client_weight);
-    } else if (algorithm == "pruned_fedavg") {
-        adjustedModelSize = static_cast<int>(baseModelSize / compressionFactor);
-    }
-
-    return adjustedModelSize;
-}
-
-double adjustAccuracyBasedOnAlgorithm(json& j, double fedproxMu, int baseModelSize, int compressionFactor, uint32_t i) {
-    double accuracy = j["accuracy"];
-    double loss = j["loss"];
-
-    if (algorithm == "fedprox") {
-        accuracy -= fedproxMu * loss;
-    } else if (algorithm == "pruned_fedavg") {
-        accuracy *= 0.9;  // Slight accuracy drop due to pruning
-    }
-
-    return accuracy;
-}
-
-void logMetrics(json& j, double accuracy, int baseModelSize, uint32_t i) {
-    accuracy_df.addRow({
-        Simulator::Now().GetSeconds(),
-        i,
-        roundNumber,
-        accuracy,
-        float(j["compressed_size"]),
-        float(j["compressed_top_n_size"]),
-        float(j["duration"]),
-        float(j["loss"]),
-        float(j["number_of_samples"]),
-        float(baseModelSize),
-        float(j["val_accuracy"]),
-        float(j["val_loss"])
-    });
-}
-
-void cleanupFinishFile(const std::string& finishFile) {
-    std::stringstream rmCommand;
-    rmCommand << "rm " << finishFile;
-    int ret_rm = system(rmCommand.str().c_str());
-
-    if (ret_rm != 0) {
-        LOG("Failed to remove finish file, command returned: " << ret_rm);
-    }
-}
-
-
-void collectTrainingMetrics(std::vector<ClientModels>& clientsInfo, double fedproxMu, int compressionFactor) {
-    for (uint32_t i = 0; i < ueNodes.GetN(); ++i) {
-        // Wait for the training completion signal file
-        std::stringstream finishFile;
-        finishFile << "models/" << ueNodes.Get(i) << ".finish";
-        waitForFile(finishFile.str());
-
-        // Retrieve model size and other metrics
-        int baseModelSize = getBaseModelSize(i);
-        auto [rsrp, sinr] = getRsrpSinr(i);
-        json j = parseJsonFile("models/" + std::to_string(ueNodes.Get(i)->GetId()) + ".json");
-
-        // Apply algorithm-specific adjustments
-        int adjustedModelSize = applyAlgorithmSpecificAdjustments(j, baseModelSize, fedproxMu, compressionFactor, sinr, i);
-        double accuracy = adjustAccuracyBasedOnAlgorithm(j, fedproxMu, baseModelSize, compressionFactor, i);
-
-        LOG("Client " << i << " Model Size (Adjusted): " << adjustedModelSize << " bytes");
-
-        // Store client info in the results vector
-        clientsInfo.emplace_back(ueNodes.Get(i), j["duration"], adjustedModelSize, rsrp, sinr, accuracy);
-
-        // Log the metrics to a data frame
-        logMetrics(j, accuracy, baseModelSize, i);
-
-        // Clean up .finish file for next round
-        cleanupFinishFile(finishFile.str());
-    }
-}
-
-std::vector<ClientModels> trainClients() {
-    std::vector<ClientModels> clientsInfo;
-    LOG("=================== " << Simulator::Now().GetSeconds() << " seconds.");
-
-    bool dummy = true;  // Toggle for dummy mode
-    // bool dummy = true;  // Toggle for dummy mode
-
-    // Set up algorithm-specific parameters
-    int compressionFactor = getCompressionFactor();
-    double fedproxMu = 0.1;  // FedProx regularization parameter
-
-    // If in dummy mode, simulate training for quick testing
-    if (dummy) {
-        simulateDummyTraining(clientsInfo);
-        return clientsInfo;
-    }
-
-    // Step 1: Issue training requests to clients
-    issueTrainingRequests();
-
-    // Step 2: Wait for completion and collect metrics
-    collectTrainingMetrics(clientsInfo, fedproxMu, compressionFactor);
-
-    return clientsInfo;
-}
-
-void getClientsInfo() {
-    for (uint32_t i = 0; i < ueNodes.GetN(); ++i) {
-        try {
-            // Retrieve RSRP and SINR for the UE node
-            auto [rsrp, sinr] = getRsrpSinr(i);
-
-            // Build JSON filename using the UE node's ID
-            const auto ueNodeId = ueNodes.Get(i)->GetId();
-            const std::string jsonFilename = "models/" + std::to_string(ueNodeId) + ".json";
-
-            // Parse existing JSON file and update values
-            auto jsonContent = parseJsonFile(jsonFilename);
-            jsonContent["rsrp"] = rsrp;
-            jsonContent["sinr"] = sinr;
-
-            // Log updated JSON for debugging or output
-            LOG(jsonContent);
-        } catch (const std::exception& ex) {
-            // Log errors during file processing
-            std::cerr << "Error processing UE node " << i << ": " << ex.what() << std::endl;
-        }
-    }
-}
-
-std::vector<ClientModels> clientSelectionSinr(int n, std::vector<ClientModels> clientsInfo)
-{
-    // Define a vector to store pairs of SINR and corresponding client
-    std::vector<std::pair<double, ClientModels>> sinrClients;
-    json selectedClientsJson;
-
-    for (uint32_t i = 0; i < clientsInfo.size(); i++)
-    {
-        // Get the SINR for the client using a hypothetical get_rsrp_sinr function
-        auto [rsrp, sinr] = getRsrpSinr(i);
-
-        // Store the SINR and client information as a pair
-        sinrClients.push_back({sinr, clientsInfo[i]});
-    }
-
-    // Sort clients based on their SINR values in descending order
-    std::sort(sinrClients.begin(), sinrClients.end(),
-              [](const std::pair<double, ClientModels> &a, const std::pair<double, ClientModels> &b)
-              {
-                  return a.first > b.first; // Compare SINR values
-              });
-
-    for (int i = 0; i < n && (long unsigned int)i < sinrClients.size(); ++i)
-    {
-        // clients_info.push_back(sinr_clients[i].second);
-        clientsInfo[i].selected = true;
-        //  = sinr_clients[i].second;
-        // client.selected = true;
-        std::stringstream modelFilename;
-        modelFilename << "models/" << clientsInfo[i].node << ".keras";
-        selectedClientsJson["selected_clients"].push_back(modelFilename.str());
-    }
-    std::ofstream out("selected_clients.json");
-    out << std::setw(4) << selectedClientsJson << std::endl;
-    out.close();
-
-    return clientsInfo;
-}
-
-std::vector<ClientModels> clientSelectionRandom(int n, std::vector<ClientModels> clientsInfo) {
-    std::vector<uint32_t> selected(ueNodes.GetN(), 0);
-    std::vector<int> numbers(ueNodes.GetN()); // Inclusive range [0, N]
-
-    for (uint32_t i = 0; i < ueNodes.GetN(); ++i) {
-        numbers[i] = i;
-    }
-
-    std::random_device rd;  // obtain a random number from hardware
-    std::mt19937 gen(rd()); // seed the generator
-    std::shuffle(numbers.begin(), numbers.end(), gen);
-    numbers.resize(n);
-    // Create a JSON object to store selected client models
-    json selectedClientsJson;
-
-    for (auto i : numbers) {
-        LOG(clientsInfo[i]);
-        clientsInfo[i].selected = true;
-        // Add the model filename of the selected client to the JSON object
-        std::stringstream modelFilename;
-        modelFilename << "models/" << ueNodes.Get(i) << ".keras";
-        selectedClientsJson["selected_clients"].push_back(modelFilename.str());
-    }
-
-    // Save the JSON object to a file
-    std::ofstream out("selected_clients.json");
-    out << std::setw(4) << selectedClientsJson << std::endl;
-    out.close();
-    return clientsInfo;
-}
-
-void selectClientsByAccuracy(int numClients, const std::vector<ClientModels>& clientsInfo, std::vector<ClientModels>& selectedClients) {
-    // Create a vector of pairs of accuracy and corresponding client
-    std::vector<std::pair<double, ClientModels>> accuracyClients;
-    for (const auto& client : clientsInfo) {
-        accuracyClients.emplace_back(client.accuracy, client);
-    }
-
-    // Sort by accuracy in descending order
-    std::sort(accuracyClients.begin(), accuracyClients.end(),
-              [](const auto& a, const auto& b) { return a.first > b.first; });
-
-    // Select top 'numClients' clients based on accuracy
-    for (int i = 0; i < numClients && i < static_cast<int>(accuracyClients.size()); ++i) {
-        selectedClients.push_back(accuracyClients[i].second);
-    }
-}
-
-std::vector<ClientModels> selectClients(int numClients, const std::vector<ClientModels>& clientsInfo) {
-    // Handle algorithm selection using a more concise approach
-    if (algorithm == "fedavg" || algorithm == "fedprox") {
-        return clientSelectionRandom(numClients, clientsInfo);
-    }
-    if (algorithm == "weighted_fedavg") {
-        // Select clients based on SINR for better signal quality
-        return clientSelectionSinr(numClients, clientsInfo);
-    }
-    if (algorithm == "pruned_fedavg") {
-        // Select clients based on accuracy (higher accuracy preferred)
-        std::vector<ClientModels> selectedClients;
-        selectClientsByAccuracy(numClients, clientsInfo, selectedClients);
-        return selectedClients;
-    }
-
-    // Default case if the algorithm is not recognized
-    return clientSelectionSinr(numClients, clientsInfo);
-}
-
-
-void logServerEvaluation() {
-    // Helper function to parse JSON file with error handling
-    auto parseJsonFile = [](const std::string& filepath) -> nlohmann::json {
-        std::ifstream ifs(filepath);
-        if (!ifs.is_open()) {
-            LOG("Error: Could not open file " << filepath);
-            return {};  // Return an empty JSON object if file can't be opened
-        }
-
-        try {
-            nlohmann::json j;
-            ifs >> j;  // Attempt to parse the JSON
-            return j;
-        } catch (const nlohmann::json::parse_error& e) {
-            LOG("Error: Failed to parse JSON file " << filepath << ". Error: " << e.what());
-            return {};  // Return an empty JSON object on parse failure
-        }
-    };
-
-    // Define the path to the JSON file
-    const std::string jsonFile = "evaluation_metrics.json";
-
-    // Parse the JSON file
-    nlohmann::json j = parseJsonFile(jsonFile);
-
-    if (j.is_null()) {
-        // Log an error if JSON parsing failed or the file was empty
-        LOG("Error: No valid data found in the JSON file.");
-    } else {
-        // Log the content of the JSON along with the current simulator time and round number
-        LOG(Simulator::Now().GetSeconds() << " seconds, round number " << roundNumber << " " << j.dump(4));
-    }
-}
-
-
-void aggregation() {
-    if (algorithm == "fedavg") {
-        runScriptAndMeasureTime("scratch/server.py --aggregation fedavg");
-    }
-
-    else if (algorithm == "fedprox") {
-        runScriptAndMeasureTime("scratch/server.py --aggregation fedprox");
-    }
-
-    else if (algorithm == "weighted_fedavg") {
-        runScriptAndMeasureTime("scratch/server.py --aggregation weighted_fedavg");
-    }
-
-    else if (algorithm == "pruned_fedavg") {
-        runScriptAndMeasureTime("scratch/server.py --aggregation pruned_fedavg");
-    }
-
-    logServerEvaluation();
-}
-
-void sendModelsToServer(const std::vector<ClientModels>& clients) {
-    for (const auto& client : clients) {
-        if (client.selected) {
-            // Adjust model size based on algorithm (e.g., pruned models)
-            double adjustedSize = static_cast<double>(client.nodeModelSize);  // Ensure size is treated as a double
-            if (algorithm == "pruned_fedavg") {
-                adjustedSize *= 0.5;  // Simulate pruning by reducing data size
-            }
-
-            // Log the scheduling of model send
-            LOG("Client " << client.node->GetId() << " scheduling send model of size " << adjustedSize << " bytes.");
-
-            // Schedule the model send after the client training time
-            Simulator::Schedule(MilliSeconds(client.nodeTrainingTime), &sendStream,
-                                client.node, remoteHostContainer.Get(0), adjustedSize);
-        }
-    }
-}
-void writeSuccessfulClients() {
-    json successfulClientsJson;
-
-    for (const auto& client : selectedClients) {
-        // Get the client's IP address
-        Ptr<Ipv4> ipv4 = client.node->GetObject<Ipv4>();
-        Ipv4Address clientIp = ipv4->GetAddress(1, 0).GetLocal();  // Client's IP address
-
-        // Check if the client has finished sending their model
-        if (endOfStreamTimes.find(clientIp) != endOfStreamTimes.end()) {
-            // Construct the model filename and add it to the successful clients list
-            successfulClientsJson["successful_clients"].push_back(
-                "models/" + std::to_string(client.node->GetId()) + ".keras"
-            );
-        }
-    }
-
-    // Write the successful clients' models to a JSON file
-    std::ofstream outFile("successful_clients.json");
-    if (outFile.is_open()) {
-        outFile << std::setw(4) << successfulClientsJson << std::endl;
-    } else {
-        std::cerr << "Error: Failed to open successful_clients.json for writing." << std::endl;
-    }
-}
-
-
-bool isRoundTimedOut(Time &roundStart) {
-    if (algorithm == "flips" && endOfStreamTimes.size() > numberOfParticipatingClients * 2 / 3) {
-        return true;
-    }
-
-    return Simulator::Now() - roundStart > timeout;
+bool isRoundTimedOut(Time roundStartTimeNs3Comms) {
+  // Timeout for ns-3 communication phase
+  return Simulator::Now() - roundStartTimeNs3Comms > timeout;
 }
 
 void logRoundTimeout() {
-    LOG("Round timed out, not all clients were able to send " << endOfStreamTimes.size() << "/"
-        << numberOfParticipatingClients);
+  LOG("ns-3 Comms Round timed out. Successful transfers: "
+      << endOfStreamTimes.size() << "/"
+      << selectedClientsForCurrentRound.size());
 }
 
 void addParticipationToDataFrame() {
-    participation_df.addRow({Simulator::Now().GetSeconds(), float(endOfStreamTimes.size()), numberOfParticipatingClients});
+  participation_df.addRow({Simulator::Now().GetSeconds(), roundNumber,
+                           (uint32_t)selectedClientsForCurrentRound.size(),
+                           (uint32_t)endOfStreamTimes.size()});
 }
 
-void finalizeRound() {
-    if (roundNumber != 0) {
-        LOG("Round finished at " << Simulator::Now().GetSeconds()
-            << ", all clients were able to send! "
-            << endOfStreamTimes.size() << "/" << numberOfParticipatingClients);
-        writeSuccessfulClients();
-        aggregation();
+// This finalize is for the ns-3 communication part of the round
+void finalizeNs3CommsPhase() {
+  LOG("ns-3 Comms phase for round "
+      << roundNumber << " finished at " << Simulator::Now().GetSeconds()
+      << ". Successful transfers: " << endOfStreamTimes.size() << "/"
+      << selectedClientsForCurrentRound.size());
+  // The actual FL aggregation was already done by Python API's /run_round.
+  // No separate aggregation() call needed here from ns-3 unless it's for a
+  // different purpose.
+
+  addParticipationToDataFrame();
+  roundCleanup(); // Clears ns-3 apps and endOfStreamTimes
+}
+
+void startNewFLRound(
+    Time &roundStartTimeNs3CommsParam) // Parameter renamed to avoid conflict
+                                       // with static
+{
+  roundNumber++;
+  LOG("StartNewFLRound: Beginning for FL Round "
+      << roundNumber << " at " << Simulator::Now().GetSeconds() << "s.");
+
+  selectNs3ManagedClients(FL_API_CLIENTS_PER_ROUND);
+  LOG("StartNewFLRound: ns-3 selected " << selectedClientsForCurrentRound.size()
+                                        << " clients.");
+
+  if (selectedClientsForCurrentRound.empty() && FL_API_CLIENTS_PER_ROUND > 0) {
+    LOG("StartNewFLRound: No clients were selected by ns-3 (e.g., due to SINR "
+        "or other criteria, or no eligible UEs). Skipping API call and ns-3 "
+        "comms for this round.");
+    roundFinished = true; // Mark as finished to allow manager to proceed
+    // No need to increment roundNumber here again, manager will loop.
+    return;
+  }
+  // If FL_API_CLIENTS_PER_ROUND is 0, selectedClientsForCurrentRound will be
+  // empty. The Python API /run_round expects client_indices. If empty, it
+  // should handle it or ns-3 should not call. Current Python API /run_round
+  // samples clients if client_indices is not provided or empty. For clarity,
+  // let's ensure ns-3 always provides the list of clients it selected, even if
+  // empty.
+
+  LOG("StartNewFLRound: Triggering FL round in Python API for round "
+      << roundNumber);
+  bool api_success = triggerAndProcessFLRoundInApi(); // This calls Python API
+
+  if (api_success) {
+    LOG("StartNewFLRound: Python API call successful for round "
+        << roundNumber);
+    if (!selectedClientsForCurrentRound.empty()) {
+      LOG("StartNewFLRound: Scheduling ns-3 model uploads for "
+          << selectedClientsForCurrentRound.size() << " clients.");
+      sendModelsToServer(); // Schedules ns-3 MyApp instances
+      roundStartTimeNs3CommsParam =
+          Simulator::Now();  // Mark start of ns-3 communication phase
+      roundFinished = false; // ns-3 communication phase now active
+      LOG("StartNewFLRound: ns-3 comms phase started for round "
+          << roundNumber << ". roundFinished set to false.");
+    } else {
+      LOG("StartNewFLRound: Python API call successful, but no clients "
+          "selected by ns-3 for simulated upload. Marking round as "
+          "(comms-wise) finished.");
+      roundFinished = true; // No ns-3 comms to simulate
     }
-
-    addParticipationToDataFrame();
-    roundCleanup();
-}
-
-void startNewRound(Time roundStart) {
-    roundStart = Simulator::Now();
-    roundNumber++;
-    roundFinished = false;
-
-    LOG("Starting round " << roundNumber << " at " << Simulator::Now().GetSeconds() << " seconds.");
-
-    // Prepare the next round's clients
-    clientsInfo = trainClients();
-    selectedClients = selectClients(numberOfParticipatingClients, clientsInfo);
-
-    sendModelsToServer(selectedClients);
+  } else {
+    LOG("StartNewFLRound: Python API call FAILED for round "
+        << roundNumber << ". Skipping ns-3 comms phase.");
+    roundFinished = true; // Mark as finished to allow manager to try next FL
+                          // round attempt (or stop if max rounds)
+  }
 }
 
 void exportDataFrames() {
-    accuracy_df.toCsv("accuracy.csv");
-    participation_df.toCsv("clientParticipation.csv");
-    throughput_df.toCsv("throughput.csv");
+  accuracy_df.toCsv("accuracy_fl_api.csv");
+  participation_df.toCsv("clientParticipation_fl_api.csv");
+  throughput_df.toCsv("throughput_fl_api.csv");
 }
 
 void manager() {
-    static Time roundStart;
+  static Time roundStartTimeNs3Comms =
+      Simulator::Now(); // Initialize to current time at first call
+  LOG("Manager called at " << Simulator::Now().GetSeconds()
+                           << "s. RoundNumber: " << roundNumber
+                           << ", roundFinished (ns-3 comms): "
+                           << roundFinished);
 
-    // Check if the round is finished based on algorithm and timeout
-    if (isRoundTimedOut(roundStart)) {
+  if (!fl_api_initialized) {
+    LOG("FL API not yet initialized by main. Manager waiting.");
+    Simulator::Schedule(Seconds(5.0), &manager);
+    return;
+  }
+
+  if (!roundFinished) {
+    LOG("Manager: ns-3 communication phase for round " << roundNumber
+                                                       << " is ongoing.");
+    if (isRoundTimedOut(roundStartTimeNs3Comms)) {
+      LOG("Manager: Round " << roundNumber << " ns-3 comms timed out.");
+      logRoundTimeout(); // Logs successful transfers vs selected
+      roundFinished = true;
+    } else {
+      nodesIPs = nodeToIps(); // Usually static, but good practice
+      bool all_selected_clients_finished_ns3_comms =
+          checkFinishedTransmission(nodesIPs, selectedClientsForCurrentRound);
+
+      if (all_selected_clients_finished_ns3_comms) {
+        if (!selectedClientsForCurrentRound.empty() ||
+            !endOfStreamTimes
+                 .empty()) { // Avoid logging if no comms were even scheduled
+          LOG("Manager: All selected clients ("
+              << endOfStreamTimes.size() << "/"
+              << selectedClientsForCurrentRound.size()
+              << ") completed ns-3 transmissions for round " << roundNumber);
+        } else if (selectedClientsForCurrentRound.empty()) {
+          LOG("Manager: No clients were selected for ns-3 comms in round "
+              << roundNumber << ", considering comms phase complete.");
+        }
         roundFinished = true;
-        logRoundTimeout();
-        addParticipationToDataFrame();
+      } else {
+        LOG("Manager: Waiting for "
+            << selectedClientsForCurrentRound.size() - endOfStreamTimes.size()
+            << " more clients to finish ns-3 comms for round " << roundNumber);
+      }
     }
-
-
-    nodesIPs = nodeToIps();
 
     if (roundFinished) {
-        finalizeRound();
-        startNewRound(roundStart);
+      LOG("Manager: Finalizing ns-3 comms phase for round " << roundNumber);
+      finalizeNs3CommsPhase(); // Logs, adds to participation_df, cleans up apps
     }
+  }
 
-    // Export participation, throughput, and accuracy data
-    exportDataFrames();
+  if (roundFinished) {
+    LOG("Manager: ns-3 communication phase for round "
+        << roundNumber << " is finished or was skipped.");
+    if (roundNumber < 5) // Limit total FL rounds for testing
+    {
+      LOG("Manager: Attempting to start new FL round (will be round "
+          << roundNumber + 1 << ")");
+      startNewFLRound(roundStartTimeNs3Comms); // This will attempt to set
+                                               // roundFinished=false
+    } else {
+      LOG("Manager: Max FL rounds (5) reached. Stopping simulation.");
+      exportDataFrames();
+      Simulator::Stop();
+      return;
+    }
+  }
 
-    // Check if transmission is finished
-    roundFinished = checkFinishedTransmission(nodesIPs, selectedClients);
-
-    // Schedule the next manager call
-    Simulator::Schedule(Seconds(1), &manager);
+  // Always schedule next manager check if simulation hasn't stopped
+  if (!Simulator::IsFinished()) {
+    LOG("Manager: Scheduling next call.");
+    Simulator::Schedule(Seconds(1.0), &manager);
+  } else {
+    LOG("Manager: Simulation is finished, not scheduling next call.");
+  }
 }
 
 void ConfigureDefaults() {
-    // LTE RLC (Radio Link Control) Configuration
-    const uint32_t maxTxBufferSizeUm = 10 * 1024 * 1024 * 10;
-    const uint32_t maxTxBufferSizeAm = 10 * 1024 * 1024;
-    const uint32_t maxTxBufferSizeLowLat = 10 * 1024 * 1024;
-
-    // Config::SetDefault("ns3::LteRlcUm::MaxTxBufferSize", UintegerValue(maxTxBufferSizeUm));
-    // Config::SetDefault("ns3::LteRlcAm::MaxTxBufferSize", UintegerValue(maxTxBufferSizeAm));
-    // Config::SetDefault("ns3::LteRlcUmLowLat::MaxTxBufferSize", UintegerValue(maxTxBufferSizeLowLat));
-
-    // TCP Configuration
-    const uint32_t sndRcvBufSize = 131072 * 100 * 10;
-
-    Config::SetDefault("ns3::TcpL4Protocol::SocketType", TypeIdValue(TcpCubic::GetTypeId()));
-    Config::SetDefault("ns3::TcpSocketBase::MinRto", TimeValue(MilliSeconds(200)));
-    Config::SetDefault("ns3::Ipv4L3Protocol::FragmentExpirationTimeout", TimeValue(Seconds(2)));
-    Config::SetDefault("ns3::TcpSocket::SegmentSize", UintegerValue(2500));
-    Config::SetDefault("ns3::TcpSocket::DelAckCount", UintegerValue(1));
-    Config::SetDefault("ns3::TcpSocket::SndBufSize", UintegerValue(sndRcvBufSize));
-    Config::SetDefault("ns3::TcpSocket::RcvBufSize", UintegerValue(sndRcvBufSize));
-
-    // LTE PHY (Physical Layer) and Spectrum Configuration
-    Config::SetDefault("ns3::LteSpectrumPhy::CtrlErrorModelEnabled", BooleanValue(true));
-    Config::SetDefault("ns3::LteSpectrumPhy::DataErrorModelEnabled", BooleanValue(true));
-
-    // LTE Helper Configuration
-    Config::SetDefault("ns3::LteHelper::UseIdealRrc", BooleanValue(false));
-    Config::SetDefault("ns3::LteUePowerControl::AccumulationEnabled", BooleanValue(false));
-
-    // LTE UE (User Equipment) Power Configuration
-    const double txPowerUe = 20.0;  // Lower the UE transmission power for more challenging transmission
-    Config::SetDefault("ns3::LteUePhy::TxPower", DoubleValue(txPowerUe));
-
-    // LTE Component Carrier Configuration
-    Config::SetDefault("ns3::ComponentCarrier::PrimaryCarrier", BooleanValue(true));
-
-    // Debugging and Logging Configuration (commented out, can be enabled if needed)
-    // LogComponentEnable("MmWaveLteRrcProtocolReal", LOG_LEVEL_ALL);
-    // LogComponentEnable("mmWaveRrcProtocolIdeal", LOG_LEVEL_ALL);
-    // LogComponentEnable("MmWaveUeNetDevice", LOG_LEVEL_ALL);
-
-    // Placeholder for additional configurations
-    // Config::SetDefault("ns3::ComponentCarrier::UlBandwidth", UintegerValue(15));
-    // Config::SetDefault("ns3::ComponentCarrier::DlBandwidth", UintegerValue(15));
+  Config::SetDefault("ns3::TcpL4Protocol::SocketType",
+                     TypeIdValue(TcpCubic::GetTypeId()));
+  Config::SetDefault("ns3::TcpSocketBase::MinRto",
+                     TimeValue(MilliSeconds(200)));
+  Config::SetDefault("ns3::Ipv4L3Protocol::FragmentExpirationTimeout",
+                     TimeValue(Seconds(2)));
+  Config::SetDefault("ns3::TcpSocket::SegmentSize",
+                     UintegerValue(1448)); // Typical MSS for 1500 MTU
+  Config::SetDefault("ns3::TcpSocket::DelAckCount", UintegerValue(1));
+  uint32_t sndRcvBufSize = 131072 * 10; // 1.3MB
+  Config::SetDefault("ns3::TcpSocket::SndBufSize",
+                     UintegerValue(sndRcvBufSize));
+  Config::SetDefault("ns3::TcpSocket::RcvBufSize",
+                     UintegerValue(sndRcvBufSize));
+  Config::SetDefault("ns3::LteHelper::UseIdealRrc", BooleanValue(false));
+  Config::SetDefault("ns3::LteUePhy::TxPower", DoubleValue(20.0));
+  // Config::SetDefault("ns3::LteEnbPhy::TxPower", DoubleValue(40.0));
 }
-
-
-// Constants for configuration values
-const std::string ALGORITHM_DESC = "Select the aggregation method for federated learning";
-const DataRate NETWORK_DATA_RATE = DataRate("100Gb/s");
-const uint32_t MTU_SIZE = 1500;
-const Time P2P_CHANNEL_DELAY = MicroSeconds(1);
-const double UE_TX_POWER = 20.0;
-const Time SIM_STOP_TIME = Seconds(simStopTime);
-const Time MANAGER_INTERVAL = Seconds(managerInterval);
 
 // Main function
 int main(int argc, char *argv[]) {
-    // Configure defaults for the simulation
-    ConfigureDefaults();
+  // Configure defaults for the simulation
+  ConfigureDefaults();
+  initializeDataFrames();
 
-    // Initialize data frames
-    initializeDataFrames();
+  CommandLine cmd;
+  cmd.AddValue("algorithm",
+               "FL algorithm (ns-3 perspective, less relevant now)", algorithm);
+  cmd.Parse(argc, argv);
 
-    // Parse command line arguments
-    CommandLine cmd;
-    cmd.AddValue("algorithm", ALGORITHM_DESC, algorithm);
-    cmd.Parse(argc, argv);
+  // --- Start Python FL API Server ---
+  LOG("Attempting to start Python FL API server...");
+  // Fork and exec to run python script in background might be cleaner for
+  // production but system() with & is simpler for this context. Make sure
+  // fl_api.py is executable or use "python3 scratch/sim/fl_api.py &"
+  int ret = system("python3 scratch/fl_api.py > fl_api.log 2>&1 &");
+  if (ret != 0) {
+    LOG("ERROR: Failed to start Python FL API server. Exit code: " << ret);
+    // return 1; // Can't proceed if API server fails to start
+  }
+  LOG("Python FL API server started (hopefully). Waiting for it to "
+      "initialize...");
+  sleep(10); // Give server time to start up. Robust: poll an endpoint.
 
-    // Create LTE helper and EPC helper
-    Ptr<LteHelper> mmwaveHelper = CreateObject<LteHelper>();
-    Ptr<PointToPointEpcHelper> epcHelper = CreateObject<PointToPointEpcHelper>();
-    mmwaveHelper->SetEpcHelper(epcHelper);
-    mmwaveHelper->SetSchedulerType("ns3::RrFfMacScheduler");
-    mmwaveHelper->SetHandoverAlgorithmType("ns3::A2A4RsrqHandoverAlgorithm");
-    mmwaveHelper->SetHandoverAlgorithmAttribute("ServingCellThreshold", UintegerValue(30));
-    mmwaveHelper->SetHandoverAlgorithmAttribute("NeighbourCellOffset", UintegerValue(1));
+  // --- Configure and Initialize Python FL API ---
+  LOG("Configuring Python FL API...");
+  json fl_config_payload;
+  fl_config_payload["dataset"] = "mnist";
+  fl_config_payload["num_clients"] = FL_API_NUM_CLIENTS; // Total UEs in ns-3
+  fl_config_payload["clients_per_round"] =
+      FL_API_CLIENTS_PER_ROUND; // Max ns-3 can pick
+  fl_config_payload["local_epochs"] = 1;
+  fl_config_payload["batch_size"] = 32;
+  // Add other relevant FL_STATE['config'] parameters from Python API
 
-    // Configure the simulation environment
-    ConfigStore inputConfig;
-    inputConfig.ConfigureDefaults();
+  int http_code = callPythonApi("/configure", "POST", fl_config_payload.dump());
+  if (http_code != 200) {
+    LOG("ERROR: Failed to configure Python FL API. HTTP Code: " << http_code);
+    // return 1;
+  } else {
+    LOG("Python FL API configured successfully.");
+  }
+  sleep(1);
 
-    // Set up remote host and network devices
-    Ptr<Node> pgw = epcHelper->GetPgwNode();
-    remoteHostContainer.Create(1);
-    Ptr<Node> remoteHost = remoteHostContainer.Get(0);
-    InternetStackHelper internet;
-    internet.Install(remoteHostContainer);
+  LOG("Initializing Python FL API simulation (data loading, initial model)...");
+  http_code = callPythonApi("/initialize_simulation", "POST");
+  if (http_code != 200) {
+    LOG("ERROR: Failed to initialize Python FL API simulation. HTTP Code: "
+        << http_code);
+    // return 1;
+  } else {
+    LOG("Python FL API simulation initialized successfully.");
+    fl_api_initialized = true; // Signal to manager that API is ready
+  }
+  sleep(1); // Give it a moment
 
-    PointToPointHelper p2ph;
-    p2ph.SetDeviceAttribute("DataRate", DataRateValue(NETWORK_DATA_RATE));
-    p2ph.SetDeviceAttribute("Mtu", UintegerValue(MTU_SIZE));
-    p2ph.SetChannelAttribute("Delay", TimeValue(P2P_CHANNEL_DELAY));
+  // --- ns-3 Network Setup (largely unchanged) ---
+  Ptr<LteHelper> mmwaveHelper = CreateObject<LteHelper>();
+  Ptr<PointToPointEpcHelper> epcHelper = CreateObject<PointToPointEpcHelper>();
+  mmwaveHelper->SetEpcHelper(epcHelper);
+  mmwaveHelper->SetSchedulerType("ns3::RrFfMacScheduler");
+  mmwaveHelper->SetHandoverAlgorithmType("ns3::A2A4RsrqHandoverAlgorithm");
 
-    NetDeviceContainer internetDevices = p2ph.Install(pgw, remoteHost);
-    Ipv4AddressHelper ipv4h;
-    ipv4h.SetBase("1.0.0.0", "255.0.0.0");
-    Ipv4InterfaceContainer internetIpIfaces = ipv4h.Assign(internetDevices);
-    remoteHostAddr = internetIpIfaces.GetAddress(1);
+  ConfigStore inputConfig;
+  inputConfig.ConfigureDefaults();
 
-    // Static routing setup for remote host
-    Ipv4StaticRoutingHelper ipv4RoutingHelper;
-    Ptr<Ipv4StaticRouting> remoteHostStaticRouting =
-        ipv4RoutingHelper.GetStaticRouting(remoteHost->GetObject<Ipv4>());
-    remoteHostStaticRouting->AddNetworkRouteTo(Ipv4Address("7.0.0.0"), Ipv4Mask("255.0.0.0"), 1);
+  Ptr<Node> pgw = epcHelper->GetPgwNode();
+  remoteHostContainer.Create(1);
+  Ptr<Node> remoteHost = remoteHostContainer.Get(0);
+  InternetStackHelper internet;
+  internet.Install(remoteHostContainer);
 
-    // Create nodes for eNB and UE
-    enbNodes.Create(numberOfEnbs);
-    ueNodes.Create(numberOfUes);
+  PointToPointHelper p2ph;
+  p2ph.SetDeviceAttribute("DataRate", DataRateValue(DataRate("10Gb/s")));
+  p2ph.SetDeviceAttribute("Mtu", UintegerValue(1500));
+  p2ph.SetChannelAttribute("Delay", TimeValue(MicroSeconds(1)));
+  NetDeviceContainer internetDevices = p2ph.Install(pgw, remoteHost);
+  Ipv4AddressHelper ipv4h;
+  ipv4h.SetBase("1.0.0.0", "255.0.0.0");
+  Ipv4InterfaceContainer internetIpIfaces = ipv4h.Assign(internetDevices);
+  remoteHostAddr = internetIpIfaces.GetAddress(1);
 
-    // Set up mobility models
-    MobilityHelper enbmobility, uemobility;
-    Ptr<ListPositionAllocator> enbPositionAlloc = CreateObject<ListPositionAllocator>();
-    Ptr<ListPositionAllocator> uePositionAlloc = CreateObject<ListPositionAllocator>();
+  Ipv4StaticRoutingHelper ipv4RoutingHelper;
+  Ptr<Ipv4StaticRouting> remoteHostStaticRouting =
+      ipv4RoutingHelper.GetStaticRouting(remoteHost->GetObject<Ipv4>());
+  remoteHostStaticRouting->AddNetworkRouteTo(Ipv4Address("7.0.0.0"),
+                                             Ipv4Mask("255.0.0.0"), 1);
 
-    for (uint32_t i = 0; i < ueNodes.GetN(); i++) {
-        uePositionAlloc->Add(Vector(dist(rng), dist(rng), dist(rng)));
-    }
-    for (uint32_t i = 0; i < enbNodes.GetN(); i++) {
-        enbPositionAlloc->Add(Vector(dist(rng), dist(rng), dist(rng)));
-    }
+  enbNodes.Create(numberOfEnbs);
+  ueNodes.Create(numberOfUes);
 
-    // Install mobility models
-    std::string traceFile = "mobility_traces/campus.ns_movements";
-    Ns2MobilityHelper ns2(traceFile);
-    ns2.Install(ueNodes.Begin(), ueNodes.End());
+  MobilityHelper enbmobility, uemobility;
+  Ptr<ListPositionAllocator> enbPositionAlloc =
+      CreateObject<ListPositionAllocator>();
+  for (int i = 0; i < numberOfEnbs; ++i) {
+    enbPositionAlloc->Add(Vector(i * 200, 0, 0)); // Spread eNBs
+  }
+  enbmobility.SetMobilityModel("ns3::ConstantPositionMobilityModel");
+  enbmobility.SetPositionAllocator(enbPositionAlloc);
+  enbmobility.Install(enbNodes);
 
-    enbmobility.SetMobilityModel("ns3::ConstantPositionMobilityModel");
-    enbmobility.SetPositionAllocator(enbPositionAlloc);
-    enbmobility.Install(enbNodes);
-    enbmobility.Install(pgw);
-    enbmobility.Install(remoteHost);
+  // Random walk for UEs
+  uemobility.SetMobilityModel(
+      "ns3::RandomWalk2dMobilityModel", "Mode", StringValue("Time"), "Time",
+      StringValue("2s"), "Speed",
+      StringValue("ns3::ConstantRandomVariable[Constant=20.0]"), // 20 m/s
+      "Bounds", StringValue("0|1000|0|1000")); // 1km x 1km area
+  uemobility.Install(ueNodes);
 
-    // Install devices and attach them
-    enbDevs = mmwaveHelper->InstallEnbDevice(enbNodes);
-    ueDevs = mmwaveHelper->InstallUeDevice(ueNodes);
-    internet.Install(ueNodes);
-    Ipv4InterfaceContainer ueIpIface = epcHelper->AssignUeIpv4Address(NetDeviceContainer(ueDevs));
-    mmwaveHelper->AddX2Interface(enbNodes);
-    mmwaveHelper->AttachToClosestEnb(ueDevs, enbDevs);
+  // Install on PGW and RemoteHost too for NetAnim
+  enbmobility.Install(pgw);
+  enbmobility.Install(remoteHost);
 
-    // Set up static routing for UEs
-    for (uint32_t i = 0; i < ueNodes.GetN(); i++) {
-        Ptr<Node> ueNode = ueNodes.Get(i);
-        Ptr<Ipv4StaticRouting> ueStaticRouting =
-            ipv4RoutingHelper.GetStaticRouting(ueNode->GetObject<Ipv4>());
-        ueStaticRouting->SetDefaultRoute(epcHelper->GetUeDefaultGatewayAddress(), 1);
-    }
+  enbDevs = mmwaveHelper->InstallEnbDevice(enbNodes);
+  ueDevs = mmwaveHelper->InstallUeDevice(ueNodes);
+  internet.Install(ueNodes);
+  epcHelper->AssignUeIpv4Address(NetDeviceContainer(ueDevs));
+  mmwaveHelper->AttachToClosestEnb(ueDevs, enbDevs); // Initial attachment
 
-    // Monitor SINR and RSRP for UEs
-    for (uint32_t i = 0; i < ueNodes.GetN(); i++) {
-        Ptr<LteUePhy> uePhy = ueDevs.Get(i)->GetObject<LteUeNetDevice>()->GetPhy();
-        uePhy->TraceConnectWithoutContext("ReportCurrentCellRsrpSinr", MakeCallback(&ReportUeSinrRsrp));
-    }
+  for (uint32_t i = 0; i < ueNodes.GetN(); i++) {
+    Ptr<Node> ueNode = ueNodes.Get(i);
+    Ptr<Ipv4StaticRouting> ueStaticRouting =
+        ipv4RoutingHelper.GetStaticRouting(ueNode->GetObject<Ipv4>());
+    ueStaticRouting->SetDefaultRoute(epcHelper->GetUeDefaultGatewayAddress(),
+                                     1);
+  }
 
-    // Flow monitoring
-    Ptr<FlowMonitor> monitor = flowmon.InstallAll();
+  for (uint32_t i = 0; i < ueNodes.GetN(); i++) {
+    Ptr<LteUePhy> uePhy = ueDevs.Get(i)->GetObject<LteUeNetDevice>()->GetPhy();
+    // Connect to the RSRP/SINR trace source using the correctly-signatured
+    // callback
+    uePhy->TraceConnectWithoutContext(
+        "ReportCurrentCellRsrpSinr",
+        MakeCallback<void, uint16_t, uint16_t, double, double, uint8_t>(
+            &ReportUeSinrRsrp));
 
-    // Schedule events
-    Simulator::Schedule(MANAGER_INTERVAL, &manager);
-    Simulator::Schedule(MANAGER_INTERVAL, &networkInfo, monitor);
+    // COMMENT OUT or DELETE the following problematic line:
+    // uePhy->TraceConnectWithoutContext("ReportCurrentCellRsrpSinr",
+    //                               MakeCallback(&ReportUePhyMetricsFromTrace));
+  }
+  Ptr<FlowMonitor> monitor = flowmon.InstallAll();
 
-    // Set up animation for visualization
-    AnimationInterface anim("mmwave-animation.xml");
-    for (uint32_t i = 0; i < ueNodes.GetN(); ++i) {
-        anim.UpdateNodeDescription(ueNodes.Get(i), "UE");
-        anim.UpdateNodeColor(ueNodes.Get(i), 255, 0, 0);  // Red color for UE
-    }
-    for (uint32_t i = 0; i < enbNodes.GetN(); ++i) {
-        anim.UpdateNodeDescription(enbNodes.Get(i), "ENB");
-        anim.UpdateNodeColor(enbNodes.Get(i), 0, 255, 0);  // Green color for eNB
-    }
-    anim.UpdateNodeDescription(remoteHost, "RH");
-    anim.UpdateNodeColor(remoteHost, 0, 0, 255);  // Blue color for Remote Host
-    anim.UpdateNodeDescription(pgw, "PGW");
-    anim.UpdateNodeColor(pgw, 0, 0, 255);  // Blue color for PGW
+  // --- Schedule ns-3 simulation events ---
+  Simulator::Schedule(Seconds(2.0),
+                      &manager); // Start manager after a brief delay
+  Simulator::Schedule(Seconds(1.0), &networkInfo,
+                      monitor); // Start network info collection
 
-    // Connect simulation events
-    Config::Connect("/NodeList/*/DeviceList/*/LteEnbRrc/ConnectionEstablished",
-                    MakeCallback(&NotifyConnectionEstablishedEnb));
-    Config::Connect("/NodeList/*/DeviceList/*/LteUeRrc/ConnectionEstablished",
-                    MakeCallback(&NotifyConnectionEstablishedUe));
-    Config::Connect("/NodeList/*/DeviceList/*/LteEnbRrc/HandoverStart",
-                    MakeCallback(&NotifyHandoverStartEnb));
-    Config::Connect("/NodeList/*/DeviceList/*/LteUeRrc/HandoverStart",
-                    MakeCallback(&NotifyHandoverStartUe));
-    Config::Connect("/NodeList/*/DeviceList/*/LteEnbRrc/HandoverEndOk",
-                    MakeCallback(&NotifyHandoverEndOkEnb));
-    Config::Connect("/NodeList/*/DeviceList/*/LteUeRrc/HandoverEndOk",
-                    MakeCallback(&NotifyHandoverEndOkUe));
+  AnimationInterface anim("fl_api_mmwave_animation.xml");
+  // anim.SetMobilityPollInterval(Seconds(1)); // Optional: control netanim
+  // update rate
+  for (uint32_t i = 0; i < ueNodes.GetN(); ++i) {
+    anim.UpdateNodeDescription(ueNodes.Get(i), "UE");
+    anim.UpdateNodeColor(ueNodes.Get(i), 255, 0, 0);
+  }
+  for (uint32_t i = 0; i < enbNodes.GetN(); ++i) {
+    anim.UpdateNodeDescription(enbNodes.Get(i), "ENB");
+    anim.UpdateNodeColor(enbNodes.Get(i), 0, 255, 0);
+  }
+  anim.UpdateNodeDescription(remoteHost, "RH_FL_Server");
+  anim.UpdateNodeColor(remoteHost, 0, 0, 255);
+  anim.UpdateNodeDescription(pgw, "PGW");
+  anim.UpdateNodeColor(pgw, 0, 0, 255);
 
-    // Run the simulation
-    Simulator::Stop(SIM_STOP_TIME);
-    Simulator::Run();
+  // Connection notification callbacks (can be useful for debugging)
+  Config::ConnectWithoutContext(
+      "/NodeList/*/DeviceList/*/LteEnbRrc/ConnectionEstablished",
+      MakeCallback(&NotifyConnectionEstablishedEnb));
+  Config::ConnectWithoutContext(
+      "/NodeList/*/DeviceList/*/LteUeRrc/ConnectionEstablished",
+      MakeCallback(&NotifyConnectionEstablishedUe));
 
-    // Output end of stream times
-    std::cout << "End of stream times per IP address:" << std::endl;
-    for (const auto &entry : endOfStreamTimes) {
-        std::cout << "IP Address: " << entry.first
-                  << " received the end signal at time: " << entry.second << " seconds."
-                  << std::endl;
-    }
+  Simulator::Stop(Seconds(simStopTime));
+  LOG("Starting ns-3 Simulation.");
+  Simulator::Run();
+  LOG("ns-3 Simulation Finished.");
 
-    // Cleanup and destroy simulation
-    Simulator::Destroy();
-    return 0;
+  // --- Clean up ---
+  // Terminate Python API server (optional, could be done manually or via kill
+  // command) Find PID of "python3 scratch/sim/fl_api.py" and kill it.
+  // system("pkill -f 'python3 scratch/sim/fl_api.py'"); // Might be too
+  // aggressive if other python3 scripts are running
+  LOG("Remember to manually stop the Python FL API server if it's still "
+      "running.");
+
+  exportDataFrames(); // Final export
+  Simulator::Destroy();
+  return 0;
 }

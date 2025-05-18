@@ -14,29 +14,32 @@
 
 using namespace ns3;
 
-// Event handling functions
 void
-NotifyConnectionEstablishedUe(std::string context, uint64_t imsi, uint16_t cellid, uint16_t rnti);
+NotifyConnectionEstablishedUe(uint64_t imsi, uint16_t cellid, uint16_t rnti);
 
 void
-NotifyHandoverStartUe(std::string context,
+NotifyHandoverStartUe(std::string context, // Keep context for now, check trace if error occurs
                       uint64_t imsi,
                       uint16_t cellid,
                       uint16_t rnti,
                       uint16_t targetCellId);
 
 void
-NotifyHandoverEndOkUe(std::string context, uint64_t imsi, uint16_t cellid, uint16_t rnti);
+NotifyHandoverEndOkUe(std::string context, // Keep context for now, check trace if error occurs
+                       uint64_t imsi, uint16_t cellid, uint16_t rnti);
+
+// Changed signature: removed std::string context
 void
-NotifyConnectionEstablishedEnb(std::string context, uint64_t imsi, uint16_t cellid, uint16_t rnti);
+NotifyConnectionEstablishedEnb(uint64_t imsi, uint16_t cellid, uint16_t rnti);
 
 void
-NotifyHandoverStartEnb(std::string context,
-                       uint64_t imsi,
-                       uint16_t cellid,
-                       uint16_t rnti,
-                       uint16_t targetCellId);
+NotifyHandoverStartEnb(std::string context, // Keep context for now, check trace if error occurs
+                        uint64_t imsi,
+                        uint16_t cellid,
+                        uint16_t rnti,
+                        uint16_t targetCellId);
 void
-NotifyHandoverEndOkEnb(std::string context, uint64_t imsi, uint16_t cellid, uint16_t rnti);
+NotifyHandoverEndOkEnb(std::string context, // Keep context for now, check trace if error occurs
+                       uint64_t imsi, uint16_t cellid, uint16_t rnti);
 
 #endif
