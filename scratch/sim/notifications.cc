@@ -13,6 +13,8 @@
 
 using namespace ns3;
 
+NS_LOG_COMPONENT_DEFINE("Notifications");
+
 // Event handling functions
 // Changed signature: removed std::string context
 void NotifyConnectionEstablishedUe(uint64_t imsi, uint16_t cellid, uint16_t rnti) {

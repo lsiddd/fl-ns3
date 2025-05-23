@@ -1,18 +1,31 @@
+# Filename: scratch/fl_api.py
 import collections
 import time
 import os
-import argparse # Usaremos para definir defaults
+import argparse
 import numpy as np
 import tensorflow as tf
 import tensorflow_datasets as tfds
 from flask import Flask, request, jsonify
-import threading # Para executar tarefas longas em segundo plano (opcional, mas bom)
+import threading
+import logging # Import logging
 
 # --- Configuração Inicial e Supressão de Logs ---
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 tf.get_logger().setLevel('ERROR')
 
 app = Flask(__name__)
+
+# Configure Flask logging
+logging.basicConfig(level=logging.INFO)
+handler = logging.StreamHandler()
+handler.setLevel(logging.INFO)
+app.logger.addHandler(handler)
+app.logger.setLevel(logging.INFO) # Default level for application logs
+
+# You can set a more verbose level for specific debug scenarios:
+# app.logger.setLevel(logging.DEBUG)
+
 
 # --- Estado Global da Simulação FL ---
 FL_STATE = {
@@ -58,10 +71,12 @@ def get_default_args():
     # Outros
     parser.add_argument('--eval_every', type=int, default=1)
     parser.add_argument('--seed', type=int, default=42)
-    return parser.parse_args([]) # Retorna args com defaults
+    
+    default_args = parser.parse_args([])
+    app.logger.debug(f"Default arguments initialized: {vars(default_args)}")
+    return default_args
 
 # --- 1. Definição do Modelo Keras ---
-# (Idêntica à original, mas usará FL_STATE['config'] implicitamente via outras funções)
 def create_model_api(dataset_name, num_classes_override=None, seed=None, config=None): # Adicionado config
     if config is None: config = FL_STATE.get('config', get_default_args()) # Fallback
 
@@ -75,6 +90,7 @@ def create_model_api(dataset_name, num_classes_override=None, seed=None, config=
         input_shape = (32, 32, 3)
         num_classes = 10
     else:
+        app.logger.error(f"Dataset desconhecido para criação de modelo: {dataset_name}")
         raise ValueError(f"Dataset desconhecido para criação de modelo: {dataset_name}")
 
     if num_classes_override is not None:
@@ -90,6 +106,7 @@ def create_model_api(dataset_name, num_classes_override=None, seed=None, config=
     model.add(tf.keras.layers.Flatten())
     model.add(tf.keras.layers.Dense(128, activation='relu', kernel_initializer=tf.keras.initializers.GlorotUniform(seed=seed)))
     model.add(tf.keras.layers.Dense(num_classes, activation='softmax', kernel_initializer=tf.keras.initializers.GlorotUniform(seed=seed)))
+    app.logger.info(f"Model created for dataset '{dataset_name}' with input shape {input_shape} and {num_classes} classes.")
     return model
 
 # --- 2. Carregamento e Pré-processamento de Dados (adaptado para usar FL_STATE['config']) ---
@@ -114,6 +131,7 @@ def create_client_tf_dataset_api(client_x_data, client_y_data, config):
     if num_unique_samples_for_client > 0:
         client_tf_ds = client_tf_ds.shuffle(buffer_size=num_unique_samples_for_client, seed=config.seed, reshuffle_each_iteration=True)
         client_tf_ds = client_tf_ds.repeat(config.local_epochs)
+    app.logger.debug(f"Client dataset created with {num_unique_samples_for_client} unique samples, repeated {config.local_epochs} times, batch size {config.batch_size}.")
     return client_tf_ds.batch(config.batch_size).prefetch(tf.data.AUTOTUNE)
 
 
@@ -127,157 +145,150 @@ def load_and_distribute_data_api():
     elif config.dataset == 'emnist_digits': tfds_name = 'emnist/digits'
     elif config.dataset == 'emnist_char': tfds_name = 'emnist/byclass'
     elif config.dataset == 'cifar10': tfds_name = 'cifar10'
-    else: raise ValueError(f"Dataset {config.dataset} não suportado.")
+    else:
+        app.logger.error(f"Dataset {config.dataset} não suportado.")
+        raise ValueError(f"Dataset {config.dataset} não suportado.")
 
+    app.logger.info(f"Loading dataset '{tfds_name}'...")
     train_ds_global_tfds, ds_info = tfds.load(tfds_name, split='train', as_supervised=False, with_info=True, shuffle_files=True)
     test_ds_global_tfds = tfds.load(tfds_name, split='test', as_supervised=False)
     num_classes = ds_info.features['label'].num_classes
     total_train_samples_tfds = ds_info.splits['train'].num_examples
+    app.logger.info(f"Dataset '{tfds_name}' loaded. Total train samples: {total_train_samples_tfds}, Num classes: {num_classes}.")
 
-    print(f"Convertendo {total_train_samples_tfds} amostras de treino de TFDS para NumPy...")
+    app.logger.info(f"Converting {total_train_samples_tfds} train samples from TFDS to NumPy...")
     train_samples_np = list(tfds.as_numpy(train_ds_global_tfds))
     x_global_orig = np.array([s['image'] for s in train_samples_np])
     y_global_orig = np.array([s['label'] for s in train_samples_np])
     if y_global_orig.ndim > 1 and y_global_orig.shape[1] == 1:
         y_global_orig = y_global_orig.flatten()
+    app.logger.info("Conversion to NumPy complete.")
 
     client_data_indices_map = [[] for _ in range(config.num_clients)]
 
     # A. Skew de Labels
     if config.non_iid_type == 'iid':
+        app.logger.info("Applying IID data partitioning.")
         all_indices = np.arange(total_train_samples_tfds)
         np.random.shuffle(all_indices)
         idx_splits = np.array_split(all_indices, config.num_clients)
         for i in range(config.num_clients): client_data_indices_map[i] = idx_splits[i].tolist()
     
     elif config.non_iid_type == 'pathological':
-        num_classes_per_client = int(max(1, config.non_iid_alpha))
-        print(f"  Particionamento Patológico: ~{num_classes_per_client} classes por cliente.")
+        num_classes_per_client = int(max(1, config.non_iid_alpha)) # alpha is num_classes_per_client
+        app.logger.info(f"Applying Pathological non-IID partitioning: ~{num_classes_per_client} classes per client.")
         indices_by_label = [np.where(y_global_orig == i)[0] for i in range(num_classes)]
         for idx_list in indices_by_label: np.random.shuffle(idx_list)
 
         shards_per_label = []
-        num_shards_target_per_label = max(1, (config.num_clients * num_classes_per_client) // num_classes)
-        for label_idx_list in indices_by_label:
-            if len(label_idx_list) > 0:
-                shards_per_label.extend(np.array_split(label_idx_list, num_shards_target_per_label))
-        np.random.shuffle(shards_per_label)
-
-        # Técnica de atribuição de shards mais robusta
-        client_shards_indices = [[] for _ in range(config.num_clients)]
-        shards_assigned_count = 0
-        # Distribui shards de forma round-robin para tentar equilibrar
-        for i in range(len(shards_per_label)):
-            client_idx_target = i % config.num_clients
-            # Tenta garantir variedade de classes por cliente
-            current_labels_for_client = set()
-            if client_shards_indices[client_idx_target]:
-                # Precisa recalcular labels se os índices já estão lá
-                temp_indices = np.concatenate(client_shards_indices[client_idx_target])
-                if len(temp_indices)>0:
-                   current_labels_for_client = set(y_global_orig[temp_indices])
-
-
-            # Se o cliente já tem o número desejado de classes únicas, pode pular para o próximo cliente
-            # que ainda precisa, ou simplesmente continuar atribuindo para balancear a quantidade de shards
-            # Esta lógica pode ser complexa. Simplificando: atribuir até num_classes_per_client shards.
-            if len(client_shards_indices[client_idx_target]) < num_classes_per_client :
-                 shard_to_assign = shards_per_label[i]
-                 client_shards_indices[client_idx_target].append(shard_to_assign)
-
-        # Se alguns clientes ficaram com poucos shards, redistribui
-        # (Esta parte da lógica original é um pouco complexa de replicar fielmente sem depuração profunda)
-        # Simplificando: cada cliente pega num_classes_per_client shards distintos se possível
+        # The number of shards per label should ensure all data is eventually used
+        # A common approach is to create N shards per class, where N is sufficient
+        # to distribute among clients. E.g., if each client gets 2 classes, and there are 10 clients,
+        # and 10 classes, we need 20 shards total.
+        # A simpler way for pathological is to create 2 shards per class, or just assign 2 classes directly
         
-        client_labels = [set() for _ in range(config.num_clients)]
-        shard_ptr = 0
+        # Original logic was a bit complex here. Let's simplify and ensure data is used.
+        # For pathological, typically each client gets a fixed number of unique classes.
+        # This implementation tries to assign `num_classes_per_client` distinct classes to each client,
+        # then fills up with remaining data in a round-robin fashion if clients still need more samples.
+        
+        # Create shards for each class
+        all_shards = []
+        for label_idx, indices_list in enumerate(indices_by_label):
+            # Create a few shards per label to distribute
+            num_shards_for_this_label = max(1, config.num_clients // num_classes) # Try to have enough for all clients
+            if num_shards_for_this_label < 2: num_shards_for_this_label = 2 # At least 2 shards per class
+            
+            if len(indices_list) > 0:
+                shards = np.array_split(indices_list, num_shards_for_this_label)
+                for shard in shards:
+                    if len(shard) > 0: all_shards.append((label_idx, shard.tolist()))
+        
+        np.random.shuffle(all_shards) # Shuffle all shards
+        
+        # Assign shards to clients
+        client_data_indices_map = [[] for _ in range(config.num_clients)]
+        client_assigned_labels = [set() for _ in range(config.num_clients)]
+        
+        shard_idx = 0
+        while shard_idx < len(all_shards):
+            # First pass: assign distinct labels up to num_classes_per_client
+            for client_id in range(config.num_clients):
+                if shard_idx >= len(all_shards): break
+                current_shard_label, current_shard_indices = all_shards[shard_idx]
+
+                if len(client_assigned_labels[client_id]) < num_classes_per_client or current_shard_label in client_assigned_labels[client_id]:
+                    # If client hasn't reached its class limit, or if this is a label it already has (allowing more data of same class)
+                    client_data_indices_map[client_id].extend(current_shard_indices)
+                    client_assigned_labels[client_id].add(current_shard_label)
+                    shard_idx += 1
+                # If client reached class limit AND this shard is a new label, skip for now to prioritize others
+                # This makes it hard to use all data. Simple round robin is better.
+
+            # If still shards left after trying to distribute distinct labels, just round-robin remaining
+            # This logic is complex to ensure all data is used and IID/non-IID properties are strict.
+            # For simplicity, if a client gets `num_classes_per_client` shards, just add more data to them.
+            if shard_idx < len(all_shards): # If some shards are left unassigned from the first pass
+                for client_id in range(config.num_clients):
+                    if shard_idx >= len(all_shards): break
+                    current_shard_label, current_shard_indices = all_shards[shard_idx]
+                    client_data_indices_map[client_id].extend(current_shard_indices)
+                    client_assigned_labels[client_id].add(current_shard_label)
+                    shard_idx += 1
+        
         for client_id in range(config.num_clients):
-            for _ in range(num_classes_per_client):
-                if shard_ptr >= len(shards_per_label): break # Se acabaram os shards
-                
-                # Procura um shard de uma classe que o cliente ainda não tenha
-                found_new_label_shard = False
-                initial_shard_ptr = shard_ptr
-                while True:
-                    current_shard = shards_per_label[shard_ptr % len(shards_per_label)]
-                    if len(current_shard) > 0:
-                        label_of_shard = y_global_orig[current_shard[0]]
-                        if label_of_shard not in client_labels[client_id]:
-                            client_data_indices_map[client_id].extend(current_shard.tolist())
-                            client_labels[client_id].add(label_of_shard)
-                            # Marcar shard como usado (ou remover, mas pode complicar a indexação circular)
-                            # Para simplificar, vamos apenas avançar o ponteiro. Pode haver reutilização
-                            # se num_classes_per_client * num_clients > num_shards.
-                            found_new_label_shard = True
-                            shard_ptr += 1
-                            break
-                    shard_ptr += 1
-                    if (shard_ptr % len(shards_per_label)) == (initial_shard_ptr % len(shards_per_label)):
-                        # Deu a volta completa e não achou shard de nova classe
-                        break 
-                if not found_new_label_shard and shard_ptr < len(shards_per_label) : # Se não achou novo, pega qualquer um
-                    current_shard = shards_per_label[shard_ptr % len(shards_per_label)]
-                    if len(current_shard) > 0:
-                         client_data_indices_map[client_id].extend(current_shard.tolist())
-                    shard_ptr+=1
-
-            if client_data_indices_map[client_id]:
-                client_data_indices_map[client_id] = list(np.unique(np.array(client_data_indices_map[client_id], dtype=int)))
-
+            client_data_indices_map[client_id] = list(np.unique(np.array(client_data_indices_map[client_id])))
+            app.logger.debug(f"  Client {client_id}: assigned {len(client_data_indices_map[client_id])} samples, labels: {sorted(list(client_assigned_labels[client_id]))}")
 
     elif config.non_iid_type == 'dirichlet':
-        print(f"  Particionamento Dirichlet com alpha={config.non_iid_alpha}.")
+        app.logger.info(f"Applying Dirichlet non-IID partitioning with alpha={config.non_iid_alpha}.")
         label_proportions = np.random.dirichlet([config.non_iid_alpha] * num_classes, config.num_clients)
         indices_by_label = [np.where(y_global_orig == i)[0] for i in range(num_classes)]
-        for idx_list in indices_by_label: np.random.shuffle(idx_list) # Embaralha dentro de cada classe
+        for idx_list in indices_by_label: np.random.shuffle(idx_list)
         
         ptr_by_label = [0] * num_classes
 
+        # Calculate target samples per client for each class
+        client_target_samples_per_class = np.zeros((config.num_clients, num_classes), dtype=int)
+        
+        # Distribute total samples based on Dirichlet proportions
+        # This approach ensures all samples are used if total_train_samples_tfds is the base.
+        total_samples_assigned_to_clients_so_far = 0
         for client_idx in range(config.num_clients):
+            # total_samples_for_this_client = int(label_proportions[client_idx].sum() * total_train_samples_tfds / config.num_clients)
+            # This is tricky: sum of proportions for a client is 1. We need to normalize proportions by column.
+            # A common way for Dirichlet:
+            # 1. Calculate how many samples of *each class* go to *each client*
+            # 2. Sum for each client.
+            
+            # This loop iterates through clients, and for each client, calculates how many samples it gets from *each* class.
+            # This is slightly different from some other Dirichlet implementations where you iterate class by class.
+            # The original code's logic of `target_num_samples_from_class_for_client` implies this.
+            
+            # Total samples available for distribution for each label
+            available_samples_per_label = [len(indices) for indices in indices_by_label]
+
             client_indices_list = []
-            # Determina o número total de amostras para este cliente (poderia ser melhorado para respeitar o total)
-            # Uma abordagem simples: dividir o total de amostras igualmente e aplicar proporções dirichlet a isso.
-            # Ou, como no original, aplicar proporção ao total de cada classe e distribuir.
-            # O original é um pouco complexo porque pode não usar todas as amostras.
-            # Tentativa de seguir o espírito do original:
-            
-            # Para cada cliente, calculamos quantas amostras de cada classe ele "quer"
-            # Esta parte precisa ser cuidadosa para não atribuir mais amostras do que existem
-            # e para distribuir todas as amostras se possível.
-            
-            # Alternativa mais simples (e comum) para Dirichlet:
-            # 1. Para cada classe, dividir os seus índices de acordo com as proporções de Dirichlet para aquela classe entre os clientes.
-            # Esta é mais difícil de implementar corretamente para garantir que todos os dados sejam usados.
-            # A abordagem no código original (iterar clientes, depois classes) é mais comum:
             for label_k in range(num_classes):
-                indices_for_label_k = indices_by_label[label_k]
-                num_samples_for_label_k = len(indices_for_label_k)
-                if num_samples_for_label_k == 0: continue
+                if available_samples_per_label[label_k] == 0: continue
+                
+                # Normalize the client's proportion for this class across all clients.
+                # Sum of label_proportions[client_idx, label_k] for a fixed client_idx over all label_k is 1.0.
+                # Sum of label_proportions[client_idx, label_k] for a fixed label_k over all client_idx is not 1.0.
+                # We need to scale label_proportions[client_idx, label_k] by the *total amount of data* in that class,
+                # then ensure the sum over clients for that class doesn't exceed total_samples_in_that_class.
 
-                # Quantas amostras o cliente atual "quer" desta classe
-                # Isso é uma proporção das *amostras totais disponíveis para esta classe*
-                # E não do total de amostras do cliente.
+                # Let's try the simple and common way:
+                # Assign fraction of total samples based on client's Dirichlet vector
+                num_samples_for_this_client_overall = total_train_samples_tfds / config.num_clients # Base for each client
                 
-                # Vamos calcular a quantidade alvo de amostras por cliente por classe
-                # A soma das proporções de Dirichlet para uma classe (coluna) não é 1.
-                # A soma das proporções de Dirichlet para um cliente (linha) é 1.
-                # Então, label_proportions[client_idx, label_k] é a fração de dados *deste cliente* que pertence à classe k.
-
-                # Precisamos de uma estimativa de amostras por cliente. Se for distribuição uniforme de quantidade total:
-                # approx_samples_per_client = total_train_samples_tfds // config.num_clients
-                # num_to_take_from_label_k = int(label_proportions[client_idx, label_k] * approx_samples_per_client)
-                
-                # O código original parece fazer o seguinte (que é mais complexo de balancear globalmente):
-                # Para cada cliente, decide quantos de cada classe pegar baseado na proporção E no total da classe.
-                # Esta parte é tricky, pois o total de "num_to_take" pode exceder o disponível.
-                # Tentando reproduzir a lógica original:
-                
-                target_num_samples_from_class_for_client = int(np.round(label_proportions[client_idx, label_k] * (total_train_samples_tfds / config.num_clients)))
+                # Take samples for this client from each class based on its proportion
+                num_to_take_from_label_k = int(label_proportions[client_idx, label_k] * num_samples_for_this_client_overall)
                 
                 start_ptr = ptr_by_label[label_k]
-                num_available_for_label_k = num_samples_for_label_k - start_ptr
+                num_available_for_label_k = len(indices_by_label[label_k]) - start_ptr
                 
-                num_actually_taken = min(target_num_samples_from_class_for_client, num_available_for_label_k)
+                num_actually_taken = min(num_to_take_from_label_k, num_available_for_label_k)
 
                 if num_actually_taken > 0:
                     end_ptr = start_ptr + num_actually_taken
@@ -286,54 +297,55 @@ def load_and_distribute_data_api():
             
             np.random.shuffle(client_indices_list)
             client_data_indices_map[client_idx] = client_indices_list
+            total_samples_assigned_to_clients_so_far += len(client_indices_list)
+            app.logger.debug(f"  Client {client_idx}: assigned {len(client_data_indices_map[client_idx])} samples.")
+        
+        app.logger.info(f"Total samples distributed via Dirichlet: {total_samples_assigned_to_clients_so_far} out of {total_train_samples_tfds}.")
+
     else:
+        app.logger.error(f"Tipo de não-IID desconhecido: {config.non_iid_type}")
         raise ValueError(f"Tipo de não-IID desconhecido: {config.non_iid_type}")
 
     # B. Aplicar Skew de Quantidade
     if config.quantity_skew_type == 'power_law':
-        print(f"  Aplicando Power Law Quantity Skew com beta={config.power_law_beta}.")
+        app.logger.info(f"Applying Power Law Quantity Skew with beta={config.power_law_beta}.")
         min_samples_per_client = max(1, config.batch_size // 4)
         raw_power_law_samples = np.random.pareto(config.power_law_beta, config.num_clients) + 1e-6
         proportions = raw_power_law_samples / np.sum(raw_power_law_samples)
 
-        # total_samples_currently_assigned = sum(len(idx_list) for idx_list in client_data_indices_map)
-        # Se quisermos que a soma das amostras *após* power law seja igual a total_train_samples_tfds:
-        # (isso pode ser muito restritivo se o label skew já removeu muitas amostras)
-        # Usaremos o total de amostras *atualmente atribuídas* como base para o power law.
-        
-        total_samples_to_distribute_by_power_law = sum(len(indices) for indices in client_data_indices_map)
-        target_samples_per_client = (proportions * total_samples_to_distribute_by_power_law).astype(int)
-        target_samples_per_client = np.maximum(target_samples_per_client, min_samples_per_client)
+        total_samples_currently_assigned = sum(len(idx_list) for idx_list in client_data_indices_map)
+        if total_samples_currently_assigned == 0:
+            app.logger.warning("No samples currently assigned, cannot apply power law quantity skew.")
+            # Skip quantity skew if no data
+        else:
+            target_samples_per_client = (proportions * total_samples_currently_assigned).astype(int)
+            target_samples_per_client = np.maximum(target_samples_per_client, min_samples_per_client)
 
-        # Ajustar para que a soma não exceda o total disponível (reduz proporcionalmente)
-        # Este passo é importante se 'total_samples_to_distribute_by_power_law' for o total global original.
-        # Se for baseado no que já foi atribuído, pode ser menos crítico.
-        current_sum_target = np.sum(target_samples_per_client)
-        if current_sum_target > total_samples_to_distribute_by_power_law and total_samples_to_distribute_by_power_law > 0:
-            excess = current_sum_target - total_samples_to_distribute_by_power_law
-            reduction_factors = target_samples_per_client / current_sum_target
-            reductions = (reduction_factors * excess).astype(int)
-            target_samples_per_client = np.maximum(min_samples_per_client, target_samples_per_client - reductions)
-        elif total_samples_to_distribute_by_power_law == 0: # Caso extremo
-             target_samples_per_client = np.zeros_like(target_samples_per_client)
-
-
-        new_client_data_indices_map = []
-        for c_idx in range(config.num_clients):
-            current_indices_for_client = np.array(client_data_indices_map[c_idx])
-            np.random.shuffle(current_indices_for_client)
-            target_count = target_samples_per_client[c_idx]
+            # Adjust to ensure sum does not exceed total available (important if previous steps reduced total)
+            current_sum_target = np.sum(target_samples_per_client)
+            if current_sum_target > total_samples_currently_assigned:
+                excess_ratio = total_samples_currently_assigned / current_sum_target
+                target_samples_per_client = (target_samples_per_client * excess_ratio).astype(int)
+                target_samples_per_client = np.maximum(target_samples_per_client, min_samples_per_client) # Re-apply min
             
-            if len(current_indices_for_client) > target_count:
-                new_client_data_indices_map.append(current_indices_for_client[:target_count].tolist())
-            else:
-                new_client_data_indices_map.append(current_indices_for_client.tolist())
-        client_data_indices_map = new_client_data_indices_map
+            new_client_data_indices_map = []
+            for c_idx in range(config.num_clients):
+                current_indices_for_client = np.array(client_data_indices_map[c_idx])
+                np.random.shuffle(current_indices_for_client)
+                target_count = target_samples_per_client[c_idx]
+                
+                if len(current_indices_for_client) > target_count:
+                    new_client_data_indices_map.append(current_indices_for_client[:target_count].tolist())
+                else:
+                    new_client_data_indices_map.append(current_indices_for_client.tolist())
+            client_data_indices_map = new_client_data_indices_map
+            app.logger.info(f"  Power Law samples per client after adjustment: {target_samples_per_client.tolist()}")
 
     # C. Criar tf.data.Datasets
     client_datasets_train_list = []
     client_num_samples_unique_list = []
-
+    
+    app.logger.info("Creating TensorFlow datasets for each client...")
     for c_idx in range(config.num_clients):
         indices_for_this_client = np.array(client_data_indices_map[c_idx], dtype=int)
         num_unique_samples = len(indices_for_this_client)
@@ -344,6 +356,7 @@ def load_and_distribute_data_api():
             empty_y = np.array([], dtype=y_global_orig.dtype)
             client_tf_ds = create_client_tf_dataset_api(empty_x, empty_y, config)
             client_datasets_train_list.append(client_tf_ds)
+            app.logger.debug(f"  Client {c_idx}: 0 unique samples, created empty dataset.")
             continue
 
         client_x_data_orig = x_global_orig[indices_for_this_client]
@@ -355,15 +368,17 @@ def load_and_distribute_data_api():
             noise = np.random.normal(0, noise_abs_std_dev, client_x_processed.shape).astype(client_x_processed.dtype)
             client_x_processed = client_x_processed + noise
             client_x_processed = np.clip(client_x_processed, 0.0, 255.0)
+            app.logger.debug(f"  Client {c_idx}: applied feature skew (noise) with std_dev {config.noise_std_dev}.")
         
         client_tf_ds = create_client_tf_dataset_api(client_x_processed, client_y_data_orig, config)
         client_datasets_train_list.append(client_tf_ds)
+        app.logger.debug(f"  Client {c_idx}: assigned {num_unique_samples} samples.")
     
     centralized_test_data = test_ds_global_tfds.map(preprocess_dataset_for_model_creation_api, num_parallel_calls=tf.data.AUTOTUNE)\
                                                .batch(config.batch_size * 2)\
                                                .prefetch(tf.data.AUTOTUNE)
 
-    print(f"Distribuição de dados concluída. Amostras por cliente: {client_num_samples_unique_list}")
+    app.logger.info(f"Data distribution completed. Samples per client: {client_num_samples_unique_list}")
     
     FL_STATE['client_train_datasets'] = client_datasets_train_list
     FL_STATE['client_num_samples_unique'] = client_num_samples_unique_list
@@ -371,6 +386,7 @@ def load_and_distribute_data_api():
     FL_STATE['num_classes'] = num_classes
     FL_STATE['eligible_client_indices'] = [i for i, n_samples in enumerate(client_num_samples_unique_list) if n_samples > 0]
     FL_STATE['data_loaded'] = True
+    app.logger.info(f"Eligible clients (with >0 samples): {len(FL_STATE['eligible_client_indices'])} out of {config.num_clients}.")
     
     return True # Success
 
@@ -378,17 +394,17 @@ def load_and_distribute_data_api():
 def client_update_api(model_template, global_weights, client_tf_dataset, num_unique_samples_this_client):
     config = FL_STATE['config']
     if num_unique_samples_this_client == 0:
+        app.logger.warning("  Client update skipped: 0 unique samples for this client.")
         return global_weights, 0.0, 0.0
 
     client_model = tf.keras.models.clone_model(model_template) # Clona a estrutura
-    # Precisa compilar o clone antes de setar pesos se o modelo original não foi compilado
-    # ou se o otimizador/métricas são diferentes. Aqui, vamos compilar sempre para segurança.
     
     if config.client_optimizer == 'sgd':
         optimizer = tf.keras.optimizers.SGD(learning_rate=config.client_lr)
     elif config.client_optimizer == 'adam':
         optimizer = tf.keras.optimizers.Adam(learning_rate=config.client_lr)
     else:
+        app.logger.error(f"Otimizador de cliente desconhecido: {config.client_optimizer}")
         raise ValueError(f"Otimizador de cliente desconhecido: {config.client_optimizer}")
 
     client_model.compile(optimizer=optimizer,
@@ -400,21 +416,24 @@ def client_update_api(model_template, global_weights, client_tf_dataset, num_uni
     if num_unique_samples_this_client > 0:
          steps_per_epoch_val = int(np.ceil(num_unique_samples_this_client * config.local_epochs / config.batch_size))
 
-    # client_tf_dataset já está com repeat(local_epochs)
-    # então epochs=1 no fit.
+    app.logger.debug(f"  Client training for {config.local_epochs} local epochs, steps_per_epoch: {steps_per_epoch_val}.")
     history = client_model.fit(client_tf_dataset, epochs=1, verbose=0, steps_per_epoch=steps_per_epoch_val)
     
     loss = history.history['loss'][-1] if 'loss' in history.history and history.history['loss'] else 0.0
     accuracy = history.history['sparse_categorical_accuracy'][-1] if 'sparse_categorical_accuracy' in history.history and history.history['sparse_categorical_accuracy'] else 0.0
+    app.logger.debug(f"  Client training finished. Loss: {loss:.4f}, Accuracy: {accuracy:.4f}.")
     return client_model.get_weights(), loss, accuracy
 
 def aggregate_weights_fedavg_api(client_weights_list, client_num_samples_list):
-    if not client_weights_list: return None
+    if not client_weights_list:
+        app.logger.warning("  Aggregation skipped: No client weights to aggregate.")
+        return None
     total_samples_in_round = sum(client_num_samples_list)
     if total_samples_in_round == 0:
-        print("  Aviso: Nenhum dado de cliente para agregar nesta rodada.")
-        return client_weights_list[0] if client_weights_list else None
+        app.logger.warning("  Aggregation skipped: No data samples from participating clients in this round.")
+        return client_weights_list[0] if client_weights_list else None # Return first client's weights or None
 
+    app.logger.info(f"  Aggregating weights using FedAvg. Total samples: {total_samples_in_round}.")
     avg_weights = [np.zeros_like(w) for w in client_weights_list[0]]
     for i, client_weights in enumerate(client_weights_list):
         num_samples = client_num_samples_list[i]
@@ -422,6 +441,7 @@ def aggregate_weights_fedavg_api(client_weights_list, client_num_samples_list):
         weight_factor = num_samples / total_samples_in_round
         for layer_idx, layer_weights in enumerate(client_weights):
             avg_weights[layer_idx] += weight_factor * layer_weights
+    app.logger.info("  FedAvg aggregation complete.")
     return avg_weights
 
 # --- Endpoints da API Flask ---
@@ -430,30 +450,32 @@ def aggregate_weights_fedavg_api(client_weights_list, client_num_samples_list):
 def configure_simulation():
     global FL_STATE
     if FL_STATE['simulation_initialized'] or FL_STATE['is_training_round_active']:
-        return jsonify({"error": "A simulação já está em andamento ou inicializada. Use /reset_simulation primeiro."}), 400
+        app.logger.warning("Attempted /configure while simulation active. Returning 400.")
+        return jsonify({"error": "A simulação já está em andando ou inicializada. Use /reset_simulation primeiro."}), 400
 
     try:
         data = request.get_json()
         if not data:
+            app.logger.error("No JSON payload provided to /configure.")
             return jsonify({"error": "Payload JSON não fornecido ou inválido."}), 400
 
+        app.logger.info(f"Received configuration request: {data}")
         # Começa com defaults e sobrescreve com o que foi passado
         current_args = get_default_args()
         # Valida e atualiza os argumentos
         for key, value in data.items():
             if hasattr(current_args, key):
-                # Tenta converter para o tipo esperado, se possível
-                # Isso é uma validação básica, idealmente usar Marshmallow ou Pydantic
                 default_val = getattr(current_args, key)
                 if default_val is not None:
                     try:
                         setattr(current_args, key, type(default_val)(value))
                     except (ValueError, TypeError) as e:
+                         app.logger.error(f"Invalid value for '{key}': {value}. Expected type {type(default_val)}. Error: {e}")
                          return jsonify({"error": f"Valor inválido para '{key}': {value}. Esperado tipo {type(default_val)}. Erro: {e}"}), 400
                 else: # Se o default é None, aceita o tipo que veio
                     setattr(current_args, key, value)
             else:
-                app.logger.warning(f"Chave de configuração desconhecida '{key}' ignorada.")
+                app.logger.warning(f"Unknown configuration key '{key}' ignored.")
         
         FL_STATE['config'] = current_args
         FL_STATE['simulation_initialized'] = False # Resetar flags dependentes
@@ -462,36 +484,43 @@ def configure_simulation():
         FL_STATE['current_round'] = 0
         FL_STATE['history_log'] = collections.defaultdict(list)
         
+        app.logger.info(f"Simulation configured successfully. Current config: {vars(FL_STATE['config'])}")
         return jsonify({"message": "Configuração recebida com sucesso.", "config": vars(FL_STATE['config'])}), 200
     except Exception as e:
-        app.logger.error(f"Erro em /configure: {e}", exc_info=True)
+        app.logger.exception(f"Error in /configure: {e}") # Logs full traceback
         return jsonify({"error": f"Erro interno ao processar configuração: {str(e)}"}), 500
 
 @app.route('/initialize_simulation', methods=['POST'])
 def initialize_simulation():
     global FL_STATE
     if FL_STATE['is_training_round_active']:
+        app.logger.warning("Attempted /initialize_simulation while training round is active.")
         return jsonify({"error": "Uma rodada de treinamento está ativa."}), 400
     if FL_STATE['simulation_initialized']:
+        app.logger.info("Simulation already initialized. Returning 200.")
         return jsonify({"message": "Simulação já inicializada. Use /reset_simulation para reconfigurar."}), 200
     if FL_STATE['config'] is None:
+        app.logger.error("Configuration not defined before /initialize_simulation.")
         return jsonify({"error": "Configuração não definida. Chame /configure primeiro."}), 400
 
     try:
+        app.logger.info("Initializing simulation...")
         # Definir sementes globais
         if FL_STATE['config'].seed is not None:
             tf.keras.utils.set_random_seed(FL_STATE['config'].seed)
-            np.random.seed(FL_STATE['config'].seed) # Redundante se set_random_seed já faz, mas garante
+            np.random.seed(FL_STATE['config'].seed)
+            app.logger.info(f"Global seed set to {FL_STATE['config'].seed}.")
 
         # 1. Carregar e distribuir dados
-        print("Inicializando: Carregando e distribuindo dados...")
+        app.logger.info("  Loading and distributing data...")
         data_load_success = load_and_distribute_data_api()
-        if not data_load_success: # Deveria levantar exceção em caso de falha, mas por via das dúvidas
+        if not data_load_success:
+            app.logger.error("  Failed to load/distribute data during initialization.")
             return jsonify({"error": "Falha ao carregar/distribuir dados."}), 500
-        print(f"Dados carregados. Clientes elegíveis: {FL_STATE['eligible_client_indices']}")
+        app.logger.info(f"  Data loaded. Eligible clients: {FL_STATE['eligible_client_indices']}")
 
         # 2. Criar e compilar modelo global
-        print("Inicializando: Criando modelo global...")
+        app.logger.info("  Creating global model...")
         FL_STATE['global_model'] = create_model_api(
             FL_STATE['config'].dataset,
             num_classes_override=FL_STATE['num_classes'],
@@ -504,22 +533,24 @@ def initialize_simulation():
         )
         FL_STATE['current_global_weights'] = FL_STATE['global_model'].get_weights()
         FL_STATE['model_compiled'] = True
-        print("Modelo global criado e compilado.")
+        app.logger.info("  Global model created and compiled.")
 
         FL_STATE['simulation_initialized'] = True
         FL_STATE['current_round'] = 0
         FL_STATE['history_log'] = collections.defaultdict(list) # Limpa histórico
         
-        # Avaliação inicial do modelo (opcional, mas bom para ter um baseline)
+        initial_loss, initial_acc = float('nan'), float('nan')
         if FL_STATE['centralized_test_dataset'] and FL_STATE['global_model']:
-            print("Avaliando modelo global inicial...")
+            app.logger.info("  Evaluating initial global model...")
             initial_loss, initial_acc = FL_STATE['global_model'].evaluate(FL_STATE['centralized_test_dataset'], verbose=0)
             FL_STATE['history_log']['round'].append(0)
-            FL_STATE['history_log']['avg_client_loss'].append(float('nan'))
+            FL_STATE['history_log']['avg_client_loss'].append(float('nan')) # No client training in round 0
             FL_STATE['history_log']['avg_client_acc'].append(float('nan'))
             FL_STATE['history_log']['global_test_loss'].append(initial_loss)
             FL_STATE['history_log']['global_test_acc'].append(initial_acc)
-            print(f"Modelo Inicial (Rodada 0) - Perda Teste: {initial_loss:.4f}, Acurácia Teste: {initial_acc:.4f}")
+            app.logger.info(f"  Initial Model (Round 0) - Test Loss: {initial_loss:.4f}, Test Accuracy: {initial_acc:.4f}")
+        else:
+            app.logger.warning("  Cannot evaluate initial model: centralized test dataset or global model not available.")
         
         return jsonify({
             "message": "Simulação FL inicializada com sucesso.",
@@ -527,13 +558,13 @@ def initialize_simulation():
             "num_eligible_clients": len(FL_STATE['eligible_client_indices']),
             "client_samples_distribution": FL_STATE['client_num_samples_unique'],
             "initial_model_evaluation": {
-                "loss": FL_STATE['history_log']['global_test_loss'][-1] if FL_STATE['history_log']['global_test_loss'] else 'N/A',
-                "accuracy": FL_STATE['history_log']['global_test_acc'][-1] if FL_STATE['history_log']['global_test_acc'] else 'N/A'
+                "loss": initial_loss,
+                "accuracy": initial_acc
             }
         }), 200
 
     except Exception as e:
-        app.logger.error(f"Erro em /initialize_simulation: {e}", exc_info=True)
+        app.logger.exception(f"Error in /initialize_simulation: {e}")
         FL_STATE['simulation_initialized'] = False # Reverte em caso de erro
         return jsonify({"error": f"Erro interno ao inicializar simulação: {str(e)}"}), 500
 
@@ -541,11 +572,14 @@ def initialize_simulation():
 def run_training_round():
     global FL_STATE
     if FL_STATE['is_training_round_active']:
+        app.logger.warning("Attempted /run_round while another round is active.")
         return jsonify({"error": "Outra rodada de treinamento já está em andamento."}), 409 # Conflict
     if not FL_STATE['simulation_initialized']:
+        app.logger.error("Attempted /run_round before simulation initialized.")
         return jsonify({"error": "Simulação não inicializada. Chame /initialize_simulation primeiro."}), 400
     if not FL_STATE['eligible_client_indices']:
-        return jsonify({"error": "Nenhum cliente elegível com dados para treinamento."}), 400
+        app.logger.warning("No eligible clients available for training in /run_round.")
+        return jsonify({"message": "Nenhum cliente elegível com dados para treinamento. Rodada pulada."}), 200
 
     FL_STATE['is_training_round_active'] = True
     try:
@@ -553,7 +587,7 @@ def run_training_round():
         FL_STATE['current_round'] += 1
         round_num = FL_STATE['current_round']
         
-        print(f"\n--- Iniciando Rodada de Treinamento FL: {round_num} ---")
+        app.logger.info(f"\n--- Iniciando Rodada de Treinamento FL: {round_num} ---")
         round_start_time = time.time()
 
         data = request.get_json(silent=True) or {}
@@ -563,6 +597,7 @@ def run_training_round():
         if selected_client_indices_input is not None:
             if not isinstance(selected_client_indices_input, list) or not all(isinstance(i, int) for i in selected_client_indices_input):
                 FL_STATE['is_training_round_active'] = False
+                app.logger.error(f"Invalid client_indices format: {selected_client_indices_input}")
                 return jsonify({"error": "client_indices deve ser uma lista de inteiros."}), 400
             
             # Valida se os índices fornecidos são elegíveis
@@ -570,10 +605,12 @@ def run_training_round():
                 idx for idx in selected_client_indices_input if idx in FL_STATE['eligible_client_indices']
             ]
             if len(sampled_original_client_indices) != len(selected_client_indices_input):
-                app.logger.warning(f"Alguns clientes selecionados manualmente não são elegíveis ou não existem. Usando apenas os válidos.")
+                app.logger.warning(f"Some manually selected clients ({len(selected_client_indices_input) - len(sampled_original_client_indices)}) are not eligible or do not exist. Using only valid ones: {sampled_original_client_indices}.")
             if not sampled_original_client_indices:
                 FL_STATE['is_training_round_active'] = False
-                return jsonify({"error": "Nenhum dos clientes selecionados manualmente é elegível ou possui dados."}), 400
+                app.logger.warning("No valid clients from manually selected indices for training.")
+                return jsonify({"message": "Nenhum dos clientes selecionados manualmente é elegível ou possui dados. Rodada pulada."}), 200
+            app.logger.info(f"  Clients selected by ns-3 (original indices): {sampled_original_client_indices}")
         else:
             num_clients_to_sample = min(config.clients_per_round, len(FL_STATE['eligible_client_indices']))
             if num_clients_to_sample > 0:
@@ -582,28 +619,32 @@ def run_training_round():
                     size=num_clients_to_sample,
                     replace=False
                 ).tolist()
-            else: # Não deveria acontecer se eligible_client_indices tem itens
+                app.logger.info(f"  Clients sampled by API (original indices): {sampled_original_client_indices}")
+            else:
                  FL_STATE['is_training_round_active'] = False
+                 app.logger.info("  No clients to sample for this round.")
                  return jsonify({"message": "Nenhum cliente para amostrar nesta rodada (verifique clients_per_round e dados dos clientes)."}), 200
 
 
-        print(f"  Rodada {round_num}/{config.num_rounds_api_max if hasattr(config, 'num_rounds_api_max') else 'N/A'} - Clientes amostrados (índices originais): {sampled_original_client_indices}")
+        app.logger.info(f"  Round {round_num}/{getattr(config, 'num_rounds_api_max', 'N/A')} - Sampled clients (original indices): {sampled_original_client_indices}")
 
         current_round_client_updates = []
         current_round_client_sample_counts = []
         current_round_client_losses = []
         current_round_client_accuracies = []
+        current_round_client_performance = {} # Detailed per-client performance
 
         for client_original_idx in sampled_original_client_indices:
             client_ds_for_training = FL_STATE['client_train_datasets'][client_original_idx]
             num_unique_samples = FL_STATE['client_num_samples_unique'][client_original_idx]
 
-            if num_unique_samples == 0: # Segurança, já filtrado por eligible_client_indices
+            if num_unique_samples == 0:
+                app.logger.warning(f"    Client {client_original_idx} has 0 samples. Skipping training.")
                 continue
 
-            print(f"    Treinando cliente {client_original_idx} com {num_unique_samples} amostras...")
+            app.logger.info(f"    Training client {client_original_idx} with {num_unique_samples} samples...")
             updated_w, loss, acc = client_update_api(
-                FL_STATE['global_model'], # Passa o modelo template (estrutura)
+                FL_STATE['global_model'],
                 FL_STATE['current_global_weights'],
                 client_ds_for_training,
                 num_unique_samples
@@ -612,64 +653,82 @@ def run_training_round():
             current_round_client_sample_counts.append(num_unique_samples)
             current_round_client_losses.append(loss)
             current_round_client_accuracies.append(acc)
-            print(f"      Cliente {client_original_idx} - Perda: {loss:.4f}, Acurácia: {acc:.4f}")
+            current_round_client_performance[client_original_idx] = {"loss": float(loss), "accuracy": float(acc), "num_samples": num_unique_samples}
+            
+            # --- Simulate Training Time and Model Size ---
+            # Model size is usually constant for a given architecture
+            simulated_model_size_bytes = 2 * 1024 * 1024 # 2MB example constant size
+            # Training time scales with number of samples and local epochs
+            simulated_training_time_ms = max(100, int(100 + num_unique_samples * 0.5 * config.local_epochs)) # Example: 100ms base + 0.5ms/sample/epoch
+            current_round_client_performance[client_original_idx]['simulated_model_size_bytes'] = simulated_model_size_bytes
+            current_round_client_performance[client_original_idx]['simulated_training_time_ms'] = simulated_training_time_ms
+            app.logger.info(f"      Client {client_original_idx} - Loss: {loss:.4f}, Accuracy: {acc:.4f}, Samples: {num_unique_samples}, Estimated Time: {simulated_training_time_ms}ms, Estimated Size: {simulated_model_size_bytes} bytes")
+            # --- End Simulation ---
+
 
         avg_loss_this_round = float('nan')
         avg_acc_this_round = float('nan')
 
         if not current_round_client_updates:
-            print(f"    Nenhum cliente treinou nesta rodada. Mantendo pesos globais.")
+            app.logger.warning(f"    No clients trained in this round. Global weights remain unchanged.")
         elif config.aggregation_method == 'fedavg':
             new_global_weights = aggregate_weights_fedavg_api(current_round_client_updates, current_round_client_sample_counts)
             if new_global_weights is not None:
                 FL_STATE['current_global_weights'] = new_global_weights
-                FL_STATE['global_model'].set_weights(FL_STATE['current_global_weights']) # Atualiza o modelo global
+                FL_STATE['global_model'].set_weights(FL_STATE['current_global_weights'])
+                app.logger.info(f"    Global model updated with FedAvg aggregation.")
+            else:
+                app.logger.warning("    FedAvg aggregation resulted in None weights. Global model not updated.")
             
             if current_round_client_sample_counts and sum(current_round_client_sample_counts) > 0:
                  avg_loss_this_round = np.average(current_round_client_losses, weights=current_round_client_sample_counts)
                  avg_acc_this_round = np.average(current_round_client_accuracies, weights=current_round_client_sample_counts)
-            elif current_round_client_losses : # Caso todos os clientes treinados tenham 0 amostras (improvável com a lógica atual)
+            elif current_round_client_losses:
                  avg_loss_this_round = np.mean(current_round_client_losses)
                  avg_acc_this_round = np.mean(current_round_client_accuracies)
 
+
         else:
             FL_STATE['is_training_round_active'] = False
+            app.logger.error(f"Unknown aggregation method: {config.aggregation_method}")
             raise ValueError(f"Método de agregação desconhecido: {config.aggregation_method}")
 
         FL_STATE['history_log']['round'].append(round_num)
         FL_STATE['history_log']['avg_client_loss'].append(avg_loss_this_round)
         FL_STATE['history_log']['avg_client_acc'].append(avg_acc_this_round)
-        print(f"    Perda Média Cliente (pond.): {avg_loss_this_round:.4f}, Acurácia Média Cliente (pond.): {avg_acc_this_round:.4f}")
+        app.logger.info(f"    Average Client Loss (weighted): {avg_loss_this_round:.4f}, Average Client Accuracy (weighted): {avg_acc_this_round:.4f}")
 
-        eval_frequency = getattr(config, 'eval_every', 1) # Default para eval_every se não estiver no config
+        eval_frequency = getattr(config, 'eval_every', 1)
         test_loss, test_acc = float('nan'), float('nan')
-        if round_num % eval_frequency == 0 or round_num == getattr(config, 'num_rounds_api_max', round_num): # Adicionado getattr para num_rounds_api_max
-            print(f"  Avaliando modelo global na rodada {round_num}...")
+        if round_num % eval_frequency == 0 or round_num == getattr(config, 'num_rounds_api_max', round_num):
+            app.logger.info(f"  Evaluating global model on centralized test set for round {round_num}...")
             test_loss, test_acc = FL_STATE['global_model'].evaluate(FL_STATE['centralized_test_dataset'], verbose=0)
-            print(f"  Avaliação Global (Rodada {round_num}): Perda={test_loss:.4f}, Acurácia={test_acc:.4f}")
+            app.logger.info(f"  Global Model Evaluation (Round {round_num}): Loss={test_loss:.4f}, Accuracy={test_acc:.4f}")
+        else:
+            app.logger.debug(f"  Skipping global model evaluation for round {round_num} as eval_every is {eval_frequency}.")
         
         FL_STATE['history_log']['global_test_loss'].append(test_loss)
         FL_STATE['history_log']['global_test_acc'].append(test_acc)
         
         round_duration = time.time() - round_start_time
-        print(f"    Tempo da Rodada: {round_duration:.2f}s")
+        app.logger.info(f"    Round Duration: {round_duration:.2f}s")
         
         FL_STATE['is_training_round_active'] = False
         return jsonify({
             "message": f"Rodada {round_num} concluída.",
             "round": round_num,
-            "selected_clients": sampled_original_client_indices,
+            "selected_clients_ns3_indices": sampled_original_client_indices,
             "avg_client_loss": avg_loss_this_round,
             "avg_client_accuracy": avg_acc_this_round,
             "global_test_loss": test_loss,
             "global_test_accuracy": test_acc,
-            "round_duration_seconds": round_duration
+            "round_duration_seconds": round_duration, # API internal round duration
+            "simulated_client_performance": current_round_client_performance # New: detailed per-client results including sim time/size
         }), 200
 
     except Exception as e:
-        app.logger.error(f"Erro em /run_round: {e}", exc_info=True)
+        app.logger.exception(f"Error in /run_round: {e}")
         FL_STATE['is_training_round_active'] = False
-        # Tenta reverter o incremento da rodada se houve erro
         if FL_STATE['history_log']['round'] and FL_STATE['history_log']['round'][-1] == FL_STATE['current_round']:
             for key in FL_STATE['history_log']: FL_STATE['history_log'][key].pop()
         FL_STATE['current_round'] = max(0, FL_STATE['current_round'] -1)
@@ -681,9 +740,6 @@ def get_simulation_status():
         config_dict = "Não configurado"
     else:
         config_dict = vars(FL_STATE['config'])
-        # Remover objetos TFDS da resposta JSON para evitar problemas de serialização
-        # config_dict = {k: v for k, v in config_dict.items() if not isinstance(v, tf.data.Dataset)}
-
 
     status = {
         "simulation_initialized": FL_STATE['simulation_initialized'],
@@ -703,26 +759,29 @@ def get_simulation_status():
             "global_test_accuracy": [f"{x:.4f}" if not np.isnan(x) else "NaN" for x in FL_STATE['history_log']['global_test_acc']],
         }
     }
+    app.logger.info(f"Status requested. Current round: {status['current_round']}, Initialized: {status['simulation_initialized']}")
     return jsonify(status), 200
 
 @app.route('/evaluate_global_model', methods=['GET'])
 def evaluate_global_model_endpoint():
     if not FL_STATE['simulation_initialized'] or not FL_STATE['global_model'] or not FL_STATE['centralized_test_dataset']:
+        app.logger.warning("Attempted /evaluate_global_model while simulation/model/dataset not ready.")
         return jsonify({"error": "Simulação não inicializada ou modelo/dataset de teste não disponível."}), 400
     
     try:
-        print("Avaliando modelo global sob demanda...")
+        app.logger.info("Evaluating global model on demand...")
         loss, acc = FL_STATE['global_model'].evaluate(FL_STATE['centralized_test_dataset'], verbose=0)
-        print(f"Avaliação sob demanda: Perda={loss:.4f}, Acurácia={acc:.4f}")
+        app.logger.info(f"On-demand evaluation: Loss={loss:.4f}, Accuracy={acc:.4f}")
         return jsonify({"global_test_loss": loss, "global_test_accuracy": acc}), 200
     except Exception as e:
-        app.logger.error(f"Erro em /evaluate_global_model: {e}", exc_info=True)
+        app.logger.exception(f"Error in /evaluate_global_model: {e}")
         return jsonify({"error": f"Erro ao avaliar modelo: {str(e)}"}), 500
 
 @app.route('/reset_simulation', methods=['POST'])
 def reset_simulation():
     global FL_STATE
     if FL_STATE['is_training_round_active']:
+         app.logger.warning("Attempted /reset_simulation while training round is active.")
          return jsonify({"error": "Não é possível resetar enquanto uma rodada de treinamento está ativa."}), 400
     
     FL_STATE = {
@@ -733,15 +792,15 @@ def reset_simulation():
         "simulation_initialized": False, "model_compiled": False, "data_loaded": False,
         "is_training_round_active": False
     }
-    # Limpar sessão Keras pode ser útil para liberar memória de modelos anteriores
     tf.keras.backend.clear_session()
-    print("Estado da simulação FL resetado.")
+    app.logger.info("FL simulation state reset.")
     return jsonify({"message": "Simulação resetada com sucesso."}), 200
 
 
 @app.route('/get_client_info', methods=['GET'])
 def get_client_info():
     if not FL_STATE['simulation_initialized'] or FL_STATE['client_num_samples_unique'] is None:
+        app.logger.warning("Attempted /get_client_info while simulation/client data not ready.")
         return jsonify({"error": "Simulação não inicializada ou dados de cliente não carregados."}), 400
 
     client_id_str = request.args.get('client_id')
@@ -750,16 +809,18 @@ def get_client_info():
         try:
             client_id = int(client_id_str)
             if not (0 <= client_id < FL_STATE['config'].num_clients):
+                app.logger.error(f"Client ID {client_id} out of range in /get_client_info.")
                 return jsonify({"error": f"client_id {client_id} fora do intervalo."}), 400
             
             info = {
                 "client_id": client_id,
                 "num_unique_samples": FL_STATE['client_num_samples_unique'][client_id],
                 "is_eligible": client_id in FL_STATE['eligible_client_indices']
-                # Poderia adicionar mais info, ex: distribuição de labels se pré-calculada
             }
+            app.logger.debug(f"Returning info for client {client_id}: {info}")
             return jsonify(info), 200
         except ValueError:
+            app.logger.error(f"Invalid client_id format: {client_id_str}")
             return jsonify({"error": "client_id deve ser um inteiro."}), 400
     else:
         all_clients_info = [
@@ -769,30 +830,27 @@ def get_client_info():
                 "is_eligible": i in FL_STATE['eligible_client_indices']
             } for i in range(FL_STATE['config'].num_clients)
         ]
+        app.logger.debug(f"Returning info for all {len(all_clients_info)} clients.")
         return jsonify({"all_clients_info": all_clients_info}), 200
 
 
-# Funcionalidades adicionais (não solicitadas diretamente, mas úteis)
 @app.route('/get_global_model_weights', methods=['GET'])
 def get_global_model_weights_endpoint():
     if not FL_STATE['current_global_weights']:
+        app.logger.warning("Attempted /get_global_model_weights while weights not available.")
         return jsonify({"error": "Pesos do modelo global não disponíveis."}), 400
     
     try:
-        # Serializar pesos para JSON é complicado. Melhor salvar em disco e retornar um path,
-        # ou uma representação textual simples se for apenas para inspeção leve.
-        # Para este exemplo, vamos apenas confirmar que existem.
-        # Para uma API real, você pode usar np.save para um arquivo temporário e permitir o download,
-        # ou converter para listas (pode ser muito grande).
         num_layers = len(FL_STATE['current_global_weights'])
         shapes = [w.shape for w in FL_STATE['current_global_weights']]
+        app.logger.info(f"Returning metadata for global model weights. Layers: {num_layers}, Shapes: {shapes}")
         return jsonify({
             "message": "Pesos do modelo global recuperados (metadados).",
             "num_layers_with_weights": num_layers,
-            "weight_shapes_per_layer": [str(s) for s in shapes] # Convertendo shapes para string
+            "weight_shapes_per_layer": [str(s) for s in shapes]
         }), 200
     except Exception as e:
-        app.logger.error(f"Erro em /get_global_model_weights: {e}", exc_info=True)
+        app.logger.exception(f"Error in /get_global_model_weights: {e}")
         return jsonify({"error": f"Erro ao processar pesos: {str(e)}"}), 500
 
 
@@ -801,22 +859,6 @@ def ping():
     app.logger.info("Ping request received")
     return jsonify({"message": "pong"}), 200
 
-
-# Não implementaremos /set_global_model_weights por simplicidade, pois envolveria
-# upload de arquivos de pesos e recriação/validação cuidadosa do modelo.
-
 if __name__ == '__main__':
-    # Configurar logging do Flask para melhor visibilidade
-    import logging
-    logging.basicConfig(level=logging.INFO)
-    handler = logging.StreamHandler() # Para sair no console
-    handler.setLevel(logging.INFO)
-    app.logger.addHandler(handler)
-    app.logger.setLevel(logging.INFO)
-
-    # Nota: O servidor de desenvolvimento Flask não é ideal para produção.
-    # Use Gunicorn ou uWSGI por trás de um proxy reverso como Nginx.
-    # Para TensorFlow, pode ser necessário executar com `threaded=False` se houver problemas de grafo,
-    # ou garantir que cada request tenha seu próprio grafo (mais complexo).
-    # Por padrão, o servidor de dev do Flask é single-threaded.
-    app.run(debug=True, host='0.0.0.0', port=5000, threaded=False) # threaded=True para dev
+    # Flask app will now use the handlers configured at the top of the file
+    app.run(debug=True, host='0.0.0.0', port=5000, threaded=False)

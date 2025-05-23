@@ -18,6 +18,7 @@
 #include "ns3/mobility-module.h"
 #include "ns3/netanim-module.h"
 #include "ns3/point-to-point-helper.h"
+#include "ns3/log.h" // Include ns-3 log module
 
 
 // Use NS3 namespace
@@ -32,11 +33,11 @@ extern std::map<uint16_t, std::map<uint16_t, double>> rsrpUe;
 extern FlowMonitorHelper flowmon; // Used in networkInfo
 
 extern DataFrame throughput_df; // Used in networkInfo
+extern DataFrame rsrp_sinr_df; // New: Used in networkInfo to potentially log more RSRP/SINR if needed, though simulation.cc handles it.
 
 // Function declarations
 
 std::pair<uint16_t, uint16_t> getUeRntiCellid(Ptr<ns3::NetDevice> ueNode);
-std::vector<NodesIps> nodeToIps();
 
 // Original RSRP/SINR callback (5 args) - may not be usable if trace source changed
 void ReportUeSinrRsrp(uint16_t cellId, uint16_t rnti, double rsrp, double sinr, uint8_t componentCarrierId);
@@ -46,6 +47,8 @@ void ReportUeSinrRsrp(std::string context, uint16_t cellId, uint16_t rnti, doubl
 // New callback for ReportCurrentCellRsrpSinr if it expects 3 arguments
 void ReportUePhyMetricsFromTrace(unsigned long arg1, unsigned short arg2, unsigned short arg3);
 
+
+std::vector<NodesIps> nodeToIps(); // Placed here as it's a utility for IP mapping
 
 void sendStream(Ptr<Node> sendingNode, Ptr<Node> receivingNode, int size);
 void sinkRxCallback(Ptr<const Packet> packet, const Address& from); // Declaration for sinkRxCallback
