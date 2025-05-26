@@ -3,6 +3,8 @@
 *.patch
 *.rej
 
+.venv
+
 *keras
 data
 *.json
