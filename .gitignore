@@ -9,7 +9,7 @@
 data
 *.json
 *.python
-*.txt
+.txt
 *.pth
 *.tflite
 campus*
@@ -79,3 +79,4 @@ cmake-build-release/
 .cache//bin/
 /classes/
 *~
+ping_response.txt
