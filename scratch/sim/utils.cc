@@ -26,13 +26,12 @@ NS_LOG_COMPONENT_DEFINE("Utils");
 
 using namespace ns3;
 
-// These are assumed to be declared globally elsewhere (e.g., in your main simulation file)
 // extern NodeContainer ueNodes;
 // extern NodeContainer remoteHostContainer;
 // extern std::map<uint16_t, std::map<uint16_t, double>> sinrUe;
 // extern std::map<uint16_t, std::map<uint16_t, double>> rsrpUe;
 // extern std::map<Ipv4Address, double> endOfStreamTimes;
-// extern struct ThroughputDataFrame throughput_df; // Assuming a struct/class for this
+// extern DataFrame ThroughputDataFrame throughput_df; // Assuming a struct/class for this
 
 // Increased TCP Segment Size in simulation.cc default config, so let's align writeSize.
 static const uint32_t writeSize = 1448; // Max packet payload size for MyApp (aligned with TCP Segment Size default)
