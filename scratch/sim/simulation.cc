@@ -31,7 +31,6 @@
 #include "ns3/tcp-socket-base.h" // Include TCP Socket Base headers for logging
 #include "ns3/ipv4-l3-protocol.h" // Include IPv4 headers for logging
 
-
 // Standard Library headers
 #include <algorithm>
 #include <chrono>
@@ -49,6 +48,7 @@
 #include <unistd.h> // For sleep
 #include <vector>
 #include <iomanip> // For std::fixed and std::setprecision
+#include <cmath> // For std::ceil
 
 // Using declarations for convenience
 using namespace ns3;
@@ -58,10 +58,10 @@ using json = nlohmann::json;
 NS_LOG_COMPONENT_DEFINE("Simulation");
 
 // Global constants
-static constexpr double simStopTime = 1200.0;
+static constexpr double simStopTime = 400.0;
 static constexpr int numberOfUes = 20; // Reduced for faster testing
-static constexpr int numberOfEnbs = 1; // Reduced for faster testing
-static constexpr int numberOfParticipatingClients = 15; 
+static constexpr int numberOfEnbs = 5; // Reduced for faster testing
+static constexpr int numberOfParticipatingClients = 15;
 static constexpr int scenarioSize = 1000;
 bool useStaticClients = true;
 std::string algorithm = "fedavg"; // This will map to FL API's aggregation if
@@ -86,10 +86,10 @@ NetDeviceContainer enbDevs;
 NetDeviceContainer ueDevs;
 Ipv4Address remoteHostAddr;
 
-// Random number generation setup
-std::random_device dev;
-std::mt19937 rng(dev());
-std::uniform_int_distribution<std::mt19937::result_type> dist(0, scenarioSize);
+// Random number generation setup - Not directly used for PositionAllocators below
+// std::random_device dev;
+// std::mt19937 rng(dev());
+// std::uniform_int_distribution<std::mt19937::result_type> dist(0, scenarioSize);
 
 // Flow monitoring helper
 FlowMonitorHelper flowmon;
@@ -115,7 +115,7 @@ std::vector<ClientModels>
                                     // round
 
 // Timeout for certain operations
-Time timeout = Seconds(120); // ns-3 round timeout for model transfers
+Time timeout = Seconds(50); // ns-3 round timeout for model transfers
 static double constexpr managerInterval =
     1.0; // ns-3 manager check interval, increased for clearer logging
 
@@ -814,43 +814,46 @@ int main(int argc, char *argv[]) {
   NS_LOG_INFO("Created " << numberOfEnbs << " eNBs and " << numberOfUes << " UEs.");
 
 MobilityHelper enbmobility;
-  Ptr<ListPositionAllocator> enbPositionAlloc =
-      CreateObject<ListPositionAllocator>();
-  for (int i = 0; i < numberOfEnbs; ++i) {
-    enbPositionAlloc->Add(Vector(i * 200, 0, 0)); // Spread eNBs
-  }
+  // Use RandomRectanglePositionAllocator for random eNB distribution
+  Ptr<RandomRectanglePositionAllocator> enbPositionAlloc =
+      CreateObject<RandomRectanglePositionAllocator>();
+  // Set bounds to the scenario size
+  std::string enbBounds = "0|" + std::to_string(scenarioSize) + "|0|" + std::to_string(scenarioSize);
+  enbPositionAlloc->SetAttribute("X", StringValue("ns3::UniformRandomVariable[Min=0.0|Max=" + std::to_string(scenarioSize) + "]"));
+  enbPositionAlloc->SetAttribute("Y", StringValue("ns3::UniformRandomVariable[Min=0.0|Max=" + std::to_string(scenarioSize) + "]"));
+  // Z is 0 by default for 2D allocators, explicitly set if needed, but usually not for typical ground scenarios
+
   enbmobility.SetMobilityModel("ns3::ConstantPositionMobilityModel");
   enbmobility.SetPositionAllocator(enbPositionAlloc);
   enbmobility.Install(enbNodes);
-  NS_LOG_INFO("eNBs installed with ConstantPositionMobilityModel.");
+  NS_LOG_INFO("eNBs installed with ConstantPositionMobilityModel and random positions within scenario size.");
 
   // --- UE MOBILITY SETUP (Conditional) ---
   MobilityHelper uemobility;
   if (useStaticClients) {
-      NS_LOG_INFO("Installing ConstantPositionMobilityModel for static UEs.");
+      NS_LOG_INFO("Installing ConstantPositionMobilityModel for static UEs with random positions.");
       uemobility.SetMobilityModel("ns3::ConstantPositionMobilityModel");
-      // Simple grid or spread placement for static UEs
-      Ptr<GridPositionAllocator> uePositionAlloc = CreateObject<GridPositionAllocator>();
-      int gridWidth = std::ceil(std::sqrt(numberOfUes));
-      uePositionAlloc->SetAttribute("MinX", DoubleValue(0));
-      uePositionAlloc->SetAttribute("MinY", DoubleValue(0));
-      uePositionAlloc->SetAttribute("DeltaX", DoubleValue(scenarioSize)); // Spacing
-      uePositionAlloc->SetAttribute("DeltaY", DoubleValue(scenarioSize)); // Spacing
-      uePositionAlloc->SetAttribute("GridWidth", UintegerValue(gridWidth));
-      uePositionAlloc->SetAttribute("LayoutType", StringValue("RowFirst"));
+      // Use RandomRectanglePositionAllocator for static UE distribution
+      Ptr<RandomRectanglePositionAllocator> uePositionAlloc = CreateObject<RandomRectanglePositionAllocator>();
+      // Set bounds to the scenario size
+      std::string ueBounds = "0|" + std::to_string(scenarioSize) + "|0|" + std::to_string(scenarioSize);
+      uePositionAlloc->SetAttribute("X", StringValue("ns3::UniformRandomVariable[Min=0.0|Max=" + std::to_string(scenarioSize) + "]"));
+      uePositionAlloc->SetAttribute("Y", StringValue("ns3::UniformRandomVariable[Min=0.0|Max=" + std::to_string(scenarioSize) + "]"));
+
       uemobility.SetPositionAllocator(uePositionAlloc);
       uemobility.Install(ueNodes);
-      NS_LOG_INFO("Static UEs installed with ConstantPositionMobilityModel in a grid layout.");
+      NS_LOG_INFO("Static UEs installed with ConstantPositionMobilityModel and random positions within scenario size.");
   } else {
       NS_LOG_INFO("Installing RandomWalk2dMobilityModel for mobile UEs.");
-      // Keep Random Walk for UEs
+      // Keep Random Walk for UEs, update bounds to use scenarioSize
+      std::string walkBounds = "0|" + std::to_string(scenarioSize) + "|0|" + std::to_string(scenarioSize);
       uemobility.SetMobilityModel(
           "ns3::RandomWalk2dMobilityModel", "Mode", StringValue("Time"), "Time",
           StringValue("2s"), "Speed",
           StringValue("ns3::ConstantRandomVariable[Constant=20.0]"), // 20 m/s
-          "Bounds", StringValue("0|1000|0|1000")); // 1km x 1km area
+          "Bounds", StringValue(walkBounds)); // Bounds based on scenarioSize
       uemobility.Install(ueNodes);
-      NS_LOG_INFO("Mobile UEs installed with RandomWalk2dMobilityModel.");
+      NS_LOG_INFO("Mobile UEs installed with RandomWalk2dMobilityModel within scenario size bounds.");
   }
 
 
