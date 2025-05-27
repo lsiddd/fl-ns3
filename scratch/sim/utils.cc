@@ -180,18 +180,18 @@ std::vector<NodesIps> nodeToIps()
 
 void sinkRxCallback(Ptr<const Packet> packet, const Address &from)
 {
-    NS_LOG_INFO("sinkRxCallback: Received packet of size " << packet->GetSize() << ". Ptr=" << packet << ", From=" << InetSocketAddress::ConvertFrom(from) << " at " << Simulator::Now().GetSeconds() << "s.");
+    // NS_LOG_INFO("sinkRxCallback: Received packet of size " << packet->GetSize() << ". Ptr=" << packet << ", From=" << InetSocketAddress::ConvertFrom(from) << " at " << Simulator::Now().GetSeconds() << "s.");
     
     if (!packet) {
-        NS_LOG_WARN("sinkRxCallback: Received a null packet. Ignoring.");
+        // NS_LOG_WARN("sinkRxCallback: Received a null packet. Ignoring.");
         return;
     }
     uint32_t packetSize = packet->GetSize();
-    NS_LOG_DEBUG("sinkRxCallback: Received packet of size " << packetSize << " from " << InetSocketAddress::ConvertFrom(from));
+    // NS_LOG_DEBUG("sinkRxCallback: Received packet of size " << packetSize << " from " << InetSocketAddress::ConvertFrom(from));
     
     if (packetSize == 0)
     {
-        NS_LOG_WARN("sinkRxCallback: Received empty packet (size 0). Ignoring.");
+        // NS_LOG_WARN("sinkRxCallback: Received empty packet (size 0). Ignoring.");
         return;
     }
 
@@ -199,14 +199,14 @@ void sinkRxCallback(Ptr<const Packet> packet, const Address &from)
     uint32_t bytes_to_check = std::min((uint32_t)100, packetSize); // Check first 100 bytes
     std::vector<uint8_t> buffer(bytes_to_check);
     packet->CopyData(buffer.data(), bytes_to_check); // Only copy up to bytes_to_check
-    NS_LOG_DEBUG("sinkRxCallback: Copied first " << bytes_to_check << " bytes to local buffer.");
+    // NS_LOG_DEBUG("sinkRxCallback: Copied first " << bytes_to_check << " bytes to local buffer.");
 
     InetSocketAddress address = InetSocketAddress::ConvertFrom(from);
     Ipv4Address senderIp = address.GetIpv4();
-    NS_LOG_DEBUG("sinkRxCallback: Sender IP: " << senderIp);
+    // NS_LOG_DEBUG("sinkRxCallback: Sender IP: " << senderIp);
 
     bool fin_packet = false;
-    NS_LOG_DEBUG("sinkRxCallback: Scanning packet payload for 'b' character (FIN signal)...");
+    // NS_LOG_DEBUG("sinkRxCallback: Scanning packet payload for 'b' character (FIN signal)...");
     for (uint32_t i = 0; i < bytes_to_check; ++i) // Only scan copied part
     {
         if (buffer[i] == 'b')
@@ -587,7 +587,7 @@ void roundCleanup()
             NS_LOG_WARN("roundCleanup: UE Node at index " << i << " is null. Skipping app cleanup for this node.");
             continue;
         }
-        NS_LOG_DEBUG("roundCleanup: Processing UE Node " << ueNode->GetId() << " (index " << i << "). Has " << ueNode->GetNApplications() << " applications.");
+        NS_LOG_DEBUG("roundCleanup: Node " << ueNode->GetId() << " (index " << i << "). Has " << ueNode->GetNApplications() << " applications.");
         
         // Iterate backwards to safely remove applications if needed, or if SetStopTime effectively removes them
         // For ns-3, SetStopTime usually just flags for stopping, not immediate removal from node's app list.

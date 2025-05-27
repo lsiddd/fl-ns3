@@ -1,4 +1,4 @@
-// Filename: scratch/sim/simulation.cc
+// Filename: /home/lucas/fl-ns3/scratch/sim/simulation.cc
 // Macro for logging - REPLACED WITH NS_LOG_COMPONENT_DEFINE
 // #define LOG(x) std::cout << x << std::endl
 
@@ -59,11 +59,11 @@ NS_LOG_COMPONENT_DEFINE("Simulation");
 
 // Global constants
 static constexpr double simStopTime = 1200.0;
-static constexpr int numberOfUes = 10; // Reduced for faster testing
-static constexpr int numberOfEnbs = 2; // Reduced for faster testing
-static constexpr int numberOfParticipatingClients =
-    5; // Max clients per round for FL
+static constexpr int numberOfUes = 20; // Reduced for faster testing
+static constexpr int numberOfEnbs = 1; // Reduced for faster testing
+static constexpr int numberOfParticipatingClients = 15; 
 static constexpr int scenarioSize = 1000;
+bool useStaticClients = true;
 std::string algorithm = "fedavg"; // This will map to FL API's aggregation if
                                   // needed, but /run_round uses its own.
 
@@ -703,14 +703,14 @@ void ConfigureDefaults() {
 int main(int argc, char *argv[]) {
   // Enable logging for components
   LogComponentEnable("Simulation", LOG_LEVEL_INFO);
-  LogComponentEnable("MyApp", LOG_LEVEL_DEBUG); // Increased logging for MyApp
+  // LogComponentEnable("MyApp", LOG_LEVEL_DEBUG); // Increased logging for MyApp
   LogComponentEnable("Utils", LOG_LEVEL_INFO);
   LogComponentEnable("ClientTypes", LOG_LEVEL_INFO);
   LogComponentEnable("DataFrame", LOG_LEVEL_DEBUG); // DataFrame can be chatty
   LogComponentEnable("Notifications", LOG_LEVEL_INFO); // Keep connection logs visible
-  LogComponentEnable("TcpSocket", LOG_LEVEL_DEBUG); // Increased logging for Sockets
-  LogComponentEnable("TcpSocketBase", LOG_LEVEL_DEBUG); // Even more socket detail
-  LogComponentEnable("Ipv4L3Protocol", LOG_LEVEL_DEBUG); // Logging for network layer issues
+  // LogComponentEnable("TcpSocket", LOG_LEVEL_DEBUG); // Increased logging for Sockets
+  // LogComponentEnable("TcpSocketBase", LOG_LEVEL_DEBUG); // Even more socket detail
+  // LogComponentEnable("Ipv4L3Protocol", LOG_LEVEL_DEBUG); // Logging for network layer issues
   // Uncomment for very detailed debug logs:
   // LogComponentEnable("Simulation", LOG_LEVEL_DEBUG);
   // LogComponentEnable("MyApp", LOG_LEVEL_DEBUG);
@@ -813,7 +813,7 @@ int main(int argc, char *argv[]) {
   ueNodes.Create(numberOfUes);
   NS_LOG_INFO("Created " << numberOfEnbs << " eNBs and " << numberOfUes << " UEs.");
 
-  MobilityHelper enbmobility, uemobility;
+MobilityHelper enbmobility;
   Ptr<ListPositionAllocator> enbPositionAlloc =
       CreateObject<ListPositionAllocator>();
   for (int i = 0; i < numberOfEnbs; ++i) {
@@ -824,18 +824,39 @@ int main(int argc, char *argv[]) {
   enbmobility.Install(enbNodes);
   NS_LOG_INFO("eNBs installed with ConstantPositionMobilityModel.");
 
-  // Random walk for UEs
-  uemobility.SetMobilityModel(
-      "ns3::RandomWalk2dMobilityModel", "Mode", StringValue("Time"), "Time",
-      StringValue("2s"), "Speed",
-      StringValue("ns3::ConstantRandomVariable[Constant=20.0]"), // 20 m/s
-      "Bounds", StringValue("0|1000|0|1000")); // 1km x 1km area
-  uemobility.Install(ueNodes);
-  NS_LOG_INFO("UEs installed with RandomWalk2dMobilityModel.");
+  // --- UE MOBILITY SETUP (Conditional) ---
+  MobilityHelper uemobility;
+  if (useStaticClients) {
+      NS_LOG_INFO("Installing ConstantPositionMobilityModel for static UEs.");
+      uemobility.SetMobilityModel("ns3::ConstantPositionMobilityModel");
+      // Simple grid or spread placement for static UEs
+      Ptr<GridPositionAllocator> uePositionAlloc = CreateObject<GridPositionAllocator>();
+      int gridWidth = std::ceil(std::sqrt(numberOfUes));
+      uePositionAlloc->SetAttribute("MinX", DoubleValue(0));
+      uePositionAlloc->SetAttribute("MinY", DoubleValue(0));
+      uePositionAlloc->SetAttribute("DeltaX", DoubleValue(scenarioSize)); // Spacing
+      uePositionAlloc->SetAttribute("DeltaY", DoubleValue(scenarioSize)); // Spacing
+      uePositionAlloc->SetAttribute("GridWidth", UintegerValue(gridWidth));
+      uePositionAlloc->SetAttribute("LayoutType", StringValue("RowFirst"));
+      uemobility.SetPositionAllocator(uePositionAlloc);
+      uemobility.Install(ueNodes);
+      NS_LOG_INFO("Static UEs installed with ConstantPositionMobilityModel in a grid layout.");
+  } else {
+      NS_LOG_INFO("Installing RandomWalk2dMobilityModel for mobile UEs.");
+      // Keep Random Walk for UEs
+      uemobility.SetMobilityModel(
+          "ns3::RandomWalk2dMobilityModel", "Mode", StringValue("Time"), "Time",
+          StringValue("2s"), "Speed",
+          StringValue("ns3::ConstantRandomVariable[Constant=20.0]"), // 20 m/s
+          "Bounds", StringValue("0|1000|0|1000")); // 1km x 1km area
+      uemobility.Install(ueNodes);
+      NS_LOG_INFO("Mobile UEs installed with RandomWalk2dMobilityModel.");
+  }
+
 
   // Install on PGW and RemoteHost too for NetAnim
-  enbmobility.Install(pgw);
-  enbmobility.Install(remoteHost);
+  enbmobility.Install(pgw); // PGW mobility setup is simpler, can reuse enbmobility
+  enbmobility.Install(remoteHost); // RemoteHost is static
   NS_LOG_INFO("Mobility models installed on PGW and RemoteHost for NetAnim.");
 
   enbDevs = mmwaveHelper->InstallEnbDevice(enbNodes);
@@ -909,7 +930,7 @@ int main(int argc, char *argv[]) {
   // --- Clean up ---
   // Terminate Python API server (optional, could be done manually or via kill
   // command) Find PID of "python3 scratch/sim/fl_api.py" and kill it.
-  // system("pkill -f 'python3 scratch/sim/fl_api.py'"); // Might be too
+  system("pkill -f 'python3 scratch/sim/fl_api.py'"); // Might be too
   // aggressive if other python3 scripts are running
   NS_LOG_INFO("Remember to manually stop the Python FL API server if it's still "
       "running (e.g., using 'pkill -f fl_api.py').");
