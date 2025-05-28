@@ -8,9 +8,12 @@
 #include <variant> // To store mixed types
 #include <sstream>
 #include <cstdint>
+#include <algorithm> // For std::min, std::max, std::visit (in C++17)
 
-// Define a variant that can hold several types (int, double, string, etc.)
-using DataFrameElement = std::variant<int, double, std::string, uint32_t>;
+// Define a variant that can hold several types (int, double, string, uint32_t, etc.)
+// Added long unsigned int as it appears in insertData parameters.
+using DataFrameElement = std::variant<int, double, std::string, uint32_t, long unsigned int, bool, float, int64_t, uint64_t>; // Expanded types if needed
+
 
 class DataFrame {
 public:

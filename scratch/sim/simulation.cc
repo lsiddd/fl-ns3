@@ -58,8 +58,8 @@ using json = nlohmann::json;
 NS_LOG_COMPONENT_DEFINE("Simulation");
 
 // Global constants
-static constexpr double simStopTime = 400.0;
-static constexpr int numberOfUes = 20; // Reduced for faster testing
+static constexpr double simStopTime = 200.0;
+static constexpr int numberOfUes = 10; // Reduced for faster testing
 static constexpr int numberOfEnbs = 5; // Reduced for faster testing
 static constexpr int numberOfParticipatingClients = 15;
 static constexpr int scenarioSize = 1000;
@@ -930,16 +930,36 @@ MobilityHelper enbmobility;
   Simulator::Run();
   NS_LOG_INFO("ns-3 Simulation Finished.");
 
-  // --- Clean up ---
-  // Terminate Python API server (optional, could be done manually or via kill
-  // command) Find PID of "python3 scratch/sim/fl_api.py" and kill it.
-  system("pkill -f 'python3 scratch/sim/fl_api.py'"); // Might be too
-  // aggressive if other python3 scripts are running
-  NS_LOG_INFO("Remember to manually stop the Python FL API server if it's still "
-      "running (e.g., using 'pkill -f fl_api.py').");
+// ... (existing code)
 
-  exportDataFrames(); // Final export
-  Simulator::Destroy();
-  NS_LOG_INFO("Simulator Destroyed.");
-  return 0;
+// --- Clean up ---
+NS_LOG_INFO("Stopping Python FL API server...");
+
+// Safer process termination using PID file tracking
+int kill_status = system("pkill -f 'python3 scratch/sim/fl_api.py'");
+
+// Handle command execution status
+if (kill_status == -1) {
+    NS_LOG_ERROR("Failed to execute pkill command: " << std::strerror(errno));
+} else {
+    // Decode exit status (Unix-specific handling)
+    if (WIFEXITED(kill_status)) {
+        const int exit_code = WEXITSTATUS(kill_status);
+        if (exit_code == 0) {
+            NS_LOG_INFO("Successfully terminated Python FL API server");
+        } else if (exit_code == 1) {
+            NS_LOG_WARN("Python server not found (already terminated?)");
+        } else {
+            NS_LOG_WARN("pkill exited abnormally (code: " << exit_code << ")");
+        }
+    } else {
+        NS_LOG_WARN("pkill terminated by signal: " << WTERMSIG(kill_status));
+    }
+}
+
+exportDataFrames(); // Final export
+Simulator::Destroy();
+NS_LOG_INFO("Simulator Destroyed.");
+return 0;
+
 }

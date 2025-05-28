@@ -8,9 +8,12 @@ void DataFrame::addColumn(const std::string& columnName) {
     columns.push_back(columnName);
     NS_LOG_DEBUG("DataFrame: Added column '" << columnName << "'.");
 
-    // Ensure all rows have the same number of columns
+    // Ensure all existing rows have a placeholder for the new column
     for (auto& row : data) {
-        row.push_back(""); // Add default empty string as a placeholder
+        // Check if the row needs a placeholder
+        if (row.size() < columns.size()) {
+             row.resize(columns.size(), DataFrameElement{""}); // Add default empty string placeholder
+        }
     }
 }
 
@@ -18,9 +21,11 @@ void DataFrame::addColumn(const std::string& columnName) {
 void DataFrame::addRow(const std::vector<DataFrameElement>& rowData) {
     if (rowData.size() == columns.size()) {
         data.push_back(rowData);
-        NS_LOG_DEBUG("DataFrame: Added a row with " << rowData.size() << " elements.");
+        // NS_LOG_DEBUG("DataFrame: Added a row with " << rowData.size() << " elements."); // Too verbose
     } else {
-        NS_LOG_ERROR("DataFrame: Error adding row. Row size (" << rowData.size() << ") does not match number of columns (" << columns.size() << ").");
+        NS_LOG_ERROR("DataFrame: Error adding row. Row size (" << rowData.size() << ") does not match number of columns (" << columns.size() << "). Row not added.");
+        // Optional: Handle this error more gracefully, e.g., pad the row or throw exception.
+        // For now, just log error and skip the row.
     }
 }
 
@@ -30,7 +35,9 @@ void DataFrame::insertData(long unsigned int row, long unsigned int col, const D
         data[row][col] = value;
         // NS_LOG_DEBUG("DataFrame: Inserted data into cell [" << row << "][" << col << "]."); // Too verbose for large dataframes
     } else {
-        NS_LOG_ERROR("DataFrame: Error inserting data. Index out of range: row=" << row << ", col=" << col << ".");
+        NS_LOG_ERROR("DataFrame: Error inserting data. Index out of range: row=" << row << ", col=" << col << ". Max row=" << data.size() << ", Max col=" << (data.empty() ? 0 : data[0].size()));
+        // Optional: Handle this error, e.g., resize or throw exception.
+        // For now, just log error and do nothing.
     }
 }
 
@@ -40,13 +47,13 @@ void DataFrame::toCsv(const std::string& filename) const {
     std::ofstream file(filename);
 
     if (!file.is_open()) {
-        NS_LOG_ERROR("DataFrame: Error: Could not open file '" << filename << "' for writing.");
+        NS_LOG_ERROR("DataFrame: Error: Could not open file '" << filename << "' for writing. Check path and permissions.");
         return;
     }
 
     // Write the column headers
     for (size_t i = 0; i < columns.size(); ++i) {
-        file << columns[i];
+        file << "\"" << columns[i] << "\""; // Enclose headers in quotes
         if (i != columns.size() - 1) {
             file << ",";
         }
@@ -57,7 +64,24 @@ void DataFrame::toCsv(const std::string& filename) const {
     // Write the data rows
     for (const auto& row : data) {
         for (size_t i = 0; i < row.size(); ++i) {
-            file << variantToString(row[i]);
+            // Use variantToString helper
+            std::string cell_str = variantToString(row[i]);
+            // Simple CSV escaping: if the string contains comma or quote, enclose in quotes and double internal quotes
+            bool needs_quotes = cell_str.find(',') != std::string::npos || cell_str.find('"') != std::string::npos || cell_str.find('\n') != std::string::npos;
+            if (needs_quotes) {
+                std::string escaped_cell_str = cell_str;
+                // Replace all " with ""
+                size_t pos = escaped_cell_str.find('"');
+                while (pos != std::string::npos) {
+                    escaped_cell_str.replace(pos, 1, "\"\"");
+                    pos = escaped_cell_str.find('"', pos + 2); // Find next after inserted ""
+                }
+                file << "\"" << escaped_cell_str << "\"";
+            } else {
+                file << cell_str;
+            }
+
+
             if (i != row.size() - 1) {
                 file << ",";
             }
@@ -66,7 +90,12 @@ void DataFrame::toCsv(const std::string& filename) const {
     }
 
     file.close();
-    NS_LOG_INFO("DataFrame: Successfully saved " << data.size() << " rows to '" << filename << "'.");
+    // Check if writing was successful (optional but good practice)
+    if (file.fail()) {
+         NS_LOG_ERROR("DataFrame: Error occurred while writing to file '" << filename << "'. File might be incomplete or corrupted.");
+    } else {
+         NS_LOG_INFO("DataFrame: Successfully saved " << data.size() << " rows to '" << filename << "'.");
+    }
 }
 
 // Get the number of columns in the DataFrame

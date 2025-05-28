@@ -10,23 +10,26 @@ MyApp::MyApp() = default;
 
 MyApp::~MyApp() {
     NS_LOG_DEBUG("MyApp destructor called for socket " << m_socket);
-    m_socket = nullptr;
+    // NS-3 Ptr handles deallocation, setting to nullptr is good practice after Close()
+    m_socket = nullptr; 
 }
 
 void MyApp::Setup(Ptr<Socket> socket, Address address, uint32_t packetSize,
                   uint32_t nPackets, DataRate dataRate, uint32_t writeSize, uint8_t* data, uint8_t* dataFin) {
     m_socket = socket;
     m_peer = address;
-    m_packetSize = packetSize;
+    // m_packetSize = packetSize; // This member variable is not used in ScheduleTx or SendPacket. Keeping it for potential future use or removing if truly redundant.
     m_nPackets = nPackets;
     m_dataRate = dataRate;
     m_startTime = Simulator::Now();
     m_data = data;
     m_data_fin = dataFin;
-    m_writeSize = writeSize;
+    m_writeSize = writeSize; // Use writeSize for actual payload size and scheduling calculation
     NS_LOG_INFO("MyApp Setup: Socket=" << socket << ", Peer=" << address
-                                       << ", PacketSize=" << packetSize << ", NumPackets=" << nPackets
-                                       << ", DataRate=" << dataRate << ", WriteSize=" << writeSize);
+                                       << ", PacketSizeForScheduling=" << packetSize // Note: packetSize is passed but writeSize is used for scheduling.
+                                       << ", ActualPayloadSize=" << writeSize
+                                       << ", NumPackets=" << nPackets
+                                       << ", DataRate=" << dataRate);
 }
 
 void MyApp::StartApplication() {
@@ -41,7 +44,14 @@ void MyApp::StartApplication() {
     m_socket->Bind();
     m_socket->Connect(m_peer);
     NS_LOG_DEBUG("MyApp StartApplication: Socket bound and connected to " << m_peer);
-    SendPacket();
+    // Schedule the first packet transmission
+    if (m_nPackets > 0) {
+       ScheduleTx(); 
+    } else {
+       NS_LOG_WARN("MyApp StartApplication: m_nPackets is 0. No packets to send.");
+       // Optionally stop the application immediately if no packets are needed
+       // Simulator::ScheduleNow(&MyApp::StopApplication, this);
+    }
 }
 
 void MyApp::StopApplication() {
@@ -56,6 +66,8 @@ void MyApp::StopApplication() {
     if (m_socket) {
         m_socket->Close();
         NS_LOG_DEBUG("MyApp StopApplication: Socket closed.");
+        // Setting to nullptr here is defensive, Ptr will handle destruction
+        // m_socket = nullptr; 
     }
 }
 
@@ -65,8 +77,16 @@ void MyApp::SendPacket() {
         return;
     }
 
+    if (m_packetsSent >= m_nPackets) {
+        NS_LOG_DEBUG("MyApp SendPacket: All " << m_nPackets << " packets scheduled have been sent.");
+        // This can happen if ScheduleTx is called but m_running is set to false just before SendPacket executes
+        // or due to logic errors. We should not attempt to send more than m_nPackets.
+        return;
+    }
+
     Ptr<Packet> packet;
-    if (m_packetsSent + 1 == m_nPackets) {
+    // Check for the last packet (m_packetsSent is 0-indexed)
+    if (m_packetsSent == m_nPackets - 1) { // Correct index check for the last packet
         packet = Create<Packet>(m_data_fin, m_writeSize);
         NS_LOG_INFO("MyApp SendPacket: Sending final packet (num " << m_packetsSent + 1 << "/" << m_nPackets << ") of size " << m_writeSize << " (FIN signal).");
     } else {
@@ -77,25 +97,38 @@ void MyApp::SendPacket() {
     int bytesSent = m_socket->Send(packet);
     if (bytesSent < 0) {
         NS_LOG_ERROR("MyApp SendPacket: Error sending packet. Bytes sent: " << bytesSent);
+        // Consider stopping the application or implementing error handling/retry logic
+        // StopApplication(); 
     } else if (bytesSent != (int)m_writeSize) {
-        NS_LOG_WARN("MyApp SendPacket: Sent " << bytesSent << " bytes, expected " << m_writeSize << " bytes.");
+        NS_LOG_WARN("MyApp SendPacket: Sent " << bytesSent << " bytes, expected " << m_writeSize << " bytes. Possible partial send.");
+        // Depending on the transport protocol and ns-3 version, Send might return
+        // less than the requested size for various reasons (e.g., buffer full).
+        // For TCP, it often sends the whole packet or returns -1.
+    } else {
+        NS_LOG_DEBUG("MyApp SendPacket: Successfully sent " << bytesSent << " bytes.");
     }
+
 
     ++m_packetsSent;
 
+    // Schedule the next packet ONLY if more packets are remaining AND the application is still running
     if (m_packetsSent < m_nPackets) {
         ScheduleTx();
     } else {
-        NS_LOG_INFO("MyApp SendPacket: All " << m_nPackets << " packets sent for this stream.");
+        NS_LOG_INFO("MyApp SendPacket: All " << m_nPackets << " packets sent for this stream. MyApp task complete.");
+        // Application should stop itself or be stopped by the simulation manager
+        // Simulator::ScheduleNow(&MyApp::StopApplication, this); // Self-stop
     }
 }
 
 void MyApp::ScheduleTx() {
     if (m_running) {
-        double seconds = static_cast<double>(m_packetSize * 8) / m_dataRate.GetBitRate();
+        // Calculate the time for the next packet based on the actual payload size (m_writeSize) and data rate
+        double seconds = static_cast<double>(m_writeSize * 8) / m_dataRate.GetBitRate();
         Time tNext = Seconds(seconds);
+        // Ensure the next event is scheduled only if the application is running
         m_sendEvent = Simulator::Schedule(tNext, &MyApp::SendPacket, this);
-        NS_LOG_DEBUG("MyApp ScheduleTx: Next packet scheduled for " << tNext.GetSeconds() << "s from now (at " << (Simulator::Now() + tNext).GetSeconds() << "s).");
+        NS_LOG_DEBUG("MyApp ScheduleTx: Next packet (" << m_packetsSent + 1 << "/" << m_nPackets << ") scheduled for " << tNext.GetSeconds() << "s from now (at " << (Simulator::Now() + tNext).GetSeconds() << "s).");
     } else {
         NS_LOG_DEBUG("MyApp ScheduleTx: Application not running, not scheduling next transmission.");
     }
