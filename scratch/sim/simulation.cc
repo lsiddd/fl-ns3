@@ -19,25 +19,27 @@
 #include "ns3/core-module.h" // Required for Simulator::Schedule
 #include "ns3/flow-monitor-module.h"
 #include "ns3/internet-module.h"
+#include "ns3/ipv4-l3-protocol.h" // Include IPv4 headers for logging
 #include "ns3/isotropic-antenna-model.h"
+#include "ns3/log.h" // Include NS-3 log module
 #include "ns3/lte-helper.h"
 #include "ns3/lte-module.h"
 #include "ns3/lte-ue-rrc.h" // Make sure LteUeRrc is included
 #include "ns3/mobility-module.h"
 #include "ns3/netanim-module.h"
 #include "ns3/point-to-point-helper.h"
-#include "ns3/log.h" // Include NS-3 log module
-#include "ns3/tcp-socket.h" // Include TCP Socket headers for logging
 #include "ns3/tcp-socket-base.h" // Include TCP Socket Base headers for logging
-#include "ns3/ipv4-l3-protocol.h" // Include IPv4 headers for logging
+#include "ns3/tcp-socket.h"      // Include TCP Socket headers for logging
 
 // Standard Library headers
 #include <algorithm>
 #include <chrono>
+#include <cmath> // For std::ceil
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <future>
+#include <iomanip> // For std::fixed and std::setprecision
 #include <iostream>
 #include <map>
 #include <random>
@@ -47,8 +49,6 @@
 #include <tuple>
 #include <unistd.h> // For sleep
 #include <vector>
-#include <iomanip> // For std::fixed and std::setprecision
-#include <cmath> // For std::ceil
 
 // Using declarations for convenience
 using namespace ns3;
@@ -58,7 +58,7 @@ using json = nlohmann::json;
 NS_LOG_COMPONENT_DEFINE("Simulation");
 
 // Global constants
-static constexpr double simStopTime = 200.0;
+static constexpr double simStopTime = 400.0;
 static constexpr int numberOfUes = 10; // Reduced for faster testing
 static constexpr int numberOfEnbs = 5; // Reduced for faster testing
 static constexpr int numberOfParticipatingClients = 15;
@@ -86,10 +86,10 @@ NetDeviceContainer enbDevs;
 NetDeviceContainer ueDevs;
 Ipv4Address remoteHostAddr;
 
-// Random number generation setup - Not directly used for PositionAllocators below
-// std::random_device dev;
-// std::mt19937 rng(dev());
-// std::uniform_int_distribution<std::mt19937::result_type> dist(0, scenarioSize);
+// Random number generation setup - Not directly used for PositionAllocators
+// below std::random_device dev; std::mt19937 rng(dev());
+// std::uniform_int_distribution<std::mt19937::result_type> dist(0,
+// scenarioSize);
 
 // Flow monitoring helper
 FlowMonitorHelper flowmon;
@@ -144,10 +144,11 @@ int callPythonApi(const std::string &endpoint,
   command << " " << FL_API_BASE_URL << endpoint;
 
   NS_LOG_INFO("callPythonApi: PREPARING to execute CURL for endpoint "
-      << endpoint << " at " << Simulator::Now().GetSeconds()
-      << "s. Command: " << command.str());
+              << endpoint << " at " << Simulator::Now().GetSeconds()
+              << "s. Command: " << command.str());
   if (method == "POST" && !data.empty()) {
-      NS_LOG_DEBUG("callPythonApi: Payload: " << data.substr(0, 200) << (data.length() > 200 ? "..." : ""));
+    NS_LOG_DEBUG("callPythonApi: Payload: "
+                 << data.substr(0, 200) << (data.length() > 200 ? "..." : ""));
   }
 
   std::fflush(stdout); // Force flush output before potentially blocking popen
@@ -157,12 +158,13 @@ int callPythonApi(const std::string &endpoint,
   FILE *pipe = popen(command.str().c_str(), "r");
   if (!pipe) {
     NS_LOG_ERROR("callPythonApi: popen() FAILED for command: "
-        << command.str() << " at " << Simulator::Now().GetSeconds() << "s.");
+                 << command.str() << " at " << Simulator::Now().GetSeconds()
+                 << "s.");
     std::fflush(stdout);
     return -1;
   }
   NS_LOG_DEBUG("callPythonApi: popen successful, READING from pipe for "
-      << endpoint << " at " << Simulator::Now().GetSeconds() << "s.");
+               << endpoint << " at " << Simulator::Now().GetSeconds() << "s.");
   std::fflush(stdout);
   try {
     while (fgets(buffer, sizeof(buffer), pipe) != nullptr) {
@@ -172,36 +174,39 @@ int callPythonApi(const std::string &endpoint,
 
   catch (const std::exception &e) {
     NS_LOG_ERROR("callPythonApi: Exception while reading from pipe for "
-        << endpoint << ": " << e.what() << " at "
-        << Simulator::Now().GetSeconds() << "s.");
+                 << endpoint << ": " << e.what() << " at "
+                 << Simulator::Now().GetSeconds() << "s.");
     std::fflush(stdout);
     pclose(pipe);
     return -2;
   } catch (...) {
     NS_LOG_ERROR("callPythonApi: Unknown exception while reading from pipe for "
-        << endpoint << " at " << Simulator::Now().GetSeconds() << "s.");
+                 << endpoint << " at " << Simulator::Now().GetSeconds()
+                 << "s.");
     std::fflush(stdout);
     pclose(pipe);
     return -3;
   }
 
   NS_LOG_DEBUG("callPythonApi: FINISHED reading from pipe for "
-      << endpoint << ". Raw result_str: '" << result_str << "'"
-      << " at " << Simulator::Now().GetSeconds() << "s.");
+               << endpoint << ". Raw result_str: '" << result_str << "'"
+               << " at " << Simulator::Now().GetSeconds() << "s.");
   std::fflush(stdout);
 
   int status = pclose(pipe);
   NS_LOG_INFO("callPythonApi: pclose status for "
-      << endpoint << ": " << status << " at " << Simulator::Now().GetSeconds()
-      << "s. Curl result: " << result_str); // Log result_str here
+              << endpoint << ": " << status << " at "
+              << Simulator::Now().GetSeconds()
+              << "s. Curl result: " << result_str); // Log result_str here
   std::fflush(stdout);
 
   if (status == -1) {
-    NS_LOG_ERROR("callPythonApi: pclose failed or command not found. Status: " << status);
+    NS_LOG_ERROR("callPythonApi: pclose failed or command not found. Status: "
+                 << status);
     return -1;
   } else if (WIFEXITED(status) && WEXITSTATUS(status) != 0) {
     NS_LOG_ERROR("callPythonApi: Curl command exited with status "
-        << WEXITSTATUS(status) << ". HTTP code: " << result_str);
+                 << WEXITSTATUS(status) << ". HTTP code: " << result_str);
     // result_str might contain the http code even if curl itself had an error
     // code (e.g. connection refused)
   }
@@ -209,10 +214,12 @@ int callPythonApi(const std::string &endpoint,
   try {
     return std::stoi(result_str);
   } catch (const std::invalid_argument &ia) {
-    NS_LOG_ERROR("callPythonApi: Invalid argument for stoi: '" << result_str << "'");
+    NS_LOG_ERROR("callPythonApi: Invalid argument for stoi: '" << result_str
+                                                               << "'");
     return -1; // Or some other error code
   } catch (const std::out_of_range &oor) {
-    NS_LOG_ERROR("callPythonApi: Out of range for stoi: '" << result_str << "'");
+    NS_LOG_ERROR("callPythonApi: Out of range for stoi: '" << result_str
+                                                           << "'");
     return -1; // Or some other error code
   }
 }
@@ -227,12 +234,12 @@ void initializeDataFrames() {
                                                "api_round_duration"};
   std::vector<std::string> participation_columns = {
       "time", "round", "selected_in_ns3", "participated_in_ns3_comms"};
-  std::vector<std::string> throughput_columns = {"time", "tx_throughput_mbps",
-                                                 "rx_throughput_mbps", "total_tx_bytes", "total_rx_bytes"};
+  std::vector<std::string> throughput_columns = {
+      "time", "tx_throughput_mbps", "rx_throughput_mbps", "total_tx_bytes",
+      "total_rx_bytes"};
   std::vector<std::string> rsrp_sinr_columns = {
-      "time", "round", "ue_node_id", "enb_cell_id", "ue_rnti", "rsrp_dbm", "sinr_db", "connected_state"
-  };
-
+      "time",    "round",    "ue_node_id", "enb_cell_id",
+      "ue_rnti", "rsrp_dbm", "sinr_db",    "connected_state"};
 
   for (const auto &column : accuracy_columns) {
     accuracy_df.addColumn(column);
@@ -261,7 +268,8 @@ std::pair<double, double> getRsrpSinr(uint32_t nodeIdx) {
   }
   auto lteUeNetDevice = ueDevice->GetObject<LteUeNetDevice>();
   if (!lteUeNetDevice) {
-    NS_LOG_DEBUG("getRsrpSinr: NetDevice at index " << nodeIdx << " is not an LteUeNetDevice.");
+    NS_LOG_DEBUG("getRsrpSinr: NetDevice at index "
+                 << nodeIdx << " is not an LteUeNetDevice.");
     return {0.0, 0.0};
   }
   auto rrc = lteUeNetDevice->GetRrc();
@@ -273,12 +281,19 @@ std::pair<double, double> getRsrpSinr(uint32_t nodeIdx) {
                rrc->GetState() != LteUeRrc::CONNECTED_HANDOVER)) {
     // Alternative check: if (!rrc || rrc->GetRnti() ==
     // LteUeRrc::UNINITIALIZED_RNTI)
-    NS_LOG_DEBUG("getRsrpSinr: UE Node " << ueNodes.Get(nodeIdx)->GetId() << " RRC not in connected state. State: " << (rrc ? rrc->GetState() : LteUeRrc::IDLE_START));
-    rsrp_sinr_df.addRow({Simulator::Now().GetSeconds(), roundNumber, ueNodes.Get(nodeIdx)->GetId(), (uint32_t)0, (uint32_t)0, 0.0, 0.0, connected_state});
+    NS_LOG_DEBUG("getRsrpSinr: UE Node "
+                 << ueNodes.Get(nodeIdx)->GetId()
+                 << " RRC not in connected state. State: "
+                 << (rrc ? rrc->GetState() : LteUeRrc::IDLE_START));
+    rsrp_sinr_df.addRow({Simulator::Now().GetSeconds(), roundNumber,
+                         ueNodes.Get(nodeIdx)->GetId(), (uint32_t)0,
+                         (uint32_t)0, 0.0, 0.0, connected_state});
     return {0.0, 0.0}; // Not connected or RRC not available
   }
-  
-  connected_state = (rrc->GetState() == LteUeRrc::CONNECTED_NORMALLY ? "CONNECTED_NORMALLY" : "CONNECTED_HANDOVER");
+
+  connected_state =
+      (rrc->GetState() == LteUeRrc::CONNECTED_NORMALLY ? "CONNECTED_NORMALLY"
+                                                       : "CONNECTED_HANDOVER");
   auto rnti = rrc->GetRnti();
   auto cellId = rrc->GetCellId();
 
@@ -290,10 +305,15 @@ std::pair<double, double> getRsrpSinr(uint32_t nodeIdx) {
   if (sinrUe.count(cellId) && sinrUe[cellId].count(rnti)) {
     sinr = sinrUe[cellId][rnti];
   }
-  
+
   // Log RSRP/SINR to DataFrame
-  rsrp_sinr_df.addRow({Simulator::Now().GetSeconds(), roundNumber, ueNodes.Get(nodeIdx)->GetId(), (uint32_t)cellId, (uint32_t)rnti, rsrp, sinr, connected_state});
-  NS_LOG_DEBUG("getRsrpSinr: UE Node " << ueNodes.Get(nodeIdx)->GetId() << " (CellId: " << cellId << ", RNTI: " << rnti << ") RSRP: " << rsrp << " dBm, SINR: " << sinr << " dB. State: " << connected_state);
+  rsrp_sinr_df.addRow({Simulator::Now().GetSeconds(), roundNumber,
+                       ueNodes.Get(nodeIdx)->GetId(), (uint32_t)cellId,
+                       (uint32_t)rnti, rsrp, sinr, connected_state});
+  NS_LOG_DEBUG("getRsrpSinr: UE Node "
+               << ueNodes.Get(nodeIdx)->GetId() << " (CellId: " << cellId
+               << ", RNTI: " << rnti << ") RSRP: " << rsrp
+               << " dBm, SINR: " << sinr << " dB. State: " << connected_state);
   return {rsrp, sinr};
 }
 
@@ -314,15 +334,18 @@ void updateAllClientsGlobalInfo() {
     clientsInfoGlobal.emplace_back(ueNodes.Get(i), defaultTrainingTime,
                                    defaultModelSizeBytes, rsrp, sinr,
                                    placeholderAccuracy);
-    NS_LOG_DEBUG("  UE Node " << ueNodes.Get(i)->GetId() << ": RSRP=" << rsrp << " dBm, SINR=" << sinr << " dB.");
+    NS_LOG_DEBUG("  UE Node " << ueNodes.Get(i)->GetId() << ": RSRP=" << rsrp
+                              << " dBm, SINR=" << sinr << " dB.");
   }
-  NS_LOG_INFO("Global client information updated for " << clientsInfoGlobal.size() << " UEs.");
+  NS_LOG_INFO("Global client information updated for "
+              << clientsInfoGlobal.size() << " UEs.");
 }
 
 // Selects clients based on ns-3 criteria for the current round
 // Populates `selectedClientsForCurrentRound`
 void selectNs3ManagedClients(int n_to_select) {
-  NS_LOG_INFO("Selecting " << n_to_select << " clients for FL round " << roundNumber << " based on ns-3 criteria.");
+  NS_LOG_INFO("Selecting " << n_to_select << " clients for FL round "
+                           << roundNumber << " based on ns-3 criteria.");
   selectedClientsForCurrentRound.clear();
   updateAllClientsGlobalInfo(); // Ensure clientsInfoGlobal is up-to-date with
                                 // SINR/RSRP
@@ -341,21 +364,33 @@ void selectNs3ManagedClients(int n_to_select) {
   int actual_selected_count = 0;
   for (int i = 0; i < n_to_select && (long unsigned int)i < candidates.size();
        ++i) {
-    // Only select clients that are actually connected (SINR != 0.0 indicates a connection in this context)
-    if (candidates[i].sinr > 0.001 || candidates[i].rsrp < 0.0) { // Assuming 0.0 means not measured/connected, or very low RSRP
+    // Only select clients that are actually connected (SINR != 0.0 indicates a
+    // connection in this context)
+    if (candidates[i].sinr > 0.001 ||
+        candidates[i].rsrp < 0.0) { // Assuming 0.0 means not
+                                    // measured/connected, or very low RSRP
       ClientModels selected_client = candidates[i];
       selected_client.selected =
           true; // Mark as selected for ns-3 comms simulation
       selectedClientsForCurrentRound.push_back(selected_client);
       actual_selected_count++;
-      NS_LOG_DEBUG("  Selected client " << selected_client.node->GetId() << " (SINR: " << selected_client.sinr << " dB, RSRP: " << selected_client.rsrp << " dBm)");
+      NS_LOG_DEBUG("  Selected client " << selected_client.node->GetId()
+                                        << " (SINR: " << selected_client.sinr
+                                        << " dB, RSRP: " << selected_client.rsrp
+                                        << " dBm)");
     } else {
-        NS_LOG_DEBUG("  Skipping client " << candidates[i].node->GetId() << " due to low SINR (" << candidates[i].sinr << " dB) or RSRP (" << candidates[i].rsrp << " dBm).");
+      NS_LOG_DEBUG("  Skipping client "
+                   << candidates[i].node->GetId() << " due to low SINR ("
+                   << candidates[i].sinr << " dB) or RSRP ("
+                   << candidates[i].rsrp << " dBm).");
     }
   }
-  NS_LOG_INFO("ns-3 selected " << actual_selected_count << " clients (out of " << n_to_select << " requested) for FL round " << roundNumber);
+  NS_LOG_INFO("ns-3 selected " << actual_selected_count << " clients (out of "
+                               << n_to_select << " requested) for FL round "
+                               << roundNumber);
   if (actual_selected_count == 0 && n_to_select > 0) {
-      NS_LOG_WARN("No eligible clients were selected by ns-3 for this round, possibly due to poor network conditions for all UEs.");
+    NS_LOG_WARN("No eligible clients were selected by ns-3 for this round, "
+                "possibly due to poor network conditions for all UEs.");
   }
 }
 
@@ -366,37 +401,20 @@ void selectNs3ManagedClients(int n_to_select) {
 // 4. Preparing for ns-3 to simulate model uploads from these selected clients.
 bool triggerAndProcessFLRoundInApi() {
   NS_LOG_INFO("=================== Triggering FL Round "
-      << roundNumber << " in Python API at " << Simulator::Now().GetSeconds()
-      << "s ===================");
+              << roundNumber << " in Python API at "
+              << Simulator::Now().GetSeconds() << "s ===================");
   std::fflush(stdout); // Ensure log is flushed
 
   if (selectedClientsForCurrentRound.empty() &&
       FL_API_CLIENTS_PER_ROUND >
           0) // Check if ns-3 wants to select but couldn't
   {
-    NS_LOG_INFO("No clients were selected by ns-3 for this round. Skipping API call "
+    NS_LOG_INFO(
+        "No clients were selected by ns-3 for this round. Skipping API call "
         "for /run_round.");
     std::fflush(stdout);
     if (FL_API_CLIENTS_PER_ROUND > 0)
       return false; // No clients to send to API for training
-  }
-
-  // TEST CALL FOR ROUND 2 (Moved for clarity, this logic is specific to test/debug)
-  if (roundNumber == 2) {
-    NS_LOG_DEBUG("Attempting a TEST CURL to /ping before FL API round 2 /run_round call "
-        "at "
-        << Simulator::Now().GetSeconds() << "s");
-    std::fflush(stdout);
-    int test_http_code = callPythonApi("/ping", "GET", "", "ping_response.txt");
-    NS_LOG_DEBUG("TEST /ping call HTTP code: " << test_http_code << " at "
-                                      << Simulator::Now().GetSeconds() << "s");
-    std::fflush(stdout);
-    if (test_http_code != 200) {
-      NS_LOG_ERROR("ERROR: Test /ping call FAILED. Aborting before /run_round for round "
-          "2.");
-      std::fflush(stdout);
-      return false; // Indicate failure
-    }
   }
 
   json client_indices_payload;
@@ -410,19 +428,22 @@ bool triggerAndProcessFLRoundInApi() {
 
   std::string response_file = "fl_round_response.json";
   NS_LOG_INFO("Calling /run_round for round "
-      << roundNumber << " with payload (first 100 chars): " << client_indices_payload.dump().substr(0,100) << "...");
+              << roundNumber << " with payload (first 100 chars): "
+              << client_indices_payload.dump().substr(0, 100) << "...");
   std::fflush(stdout);
   int http_code = callPythonApi("/run_round", "POST",
                                 client_indices_payload.dump(), response_file);
 
   if (http_code == 200) {
-    NS_LOG_INFO("Python API /run_round call successful for round " << roundNumber);
+    NS_LOG_INFO("Python API /run_round call successful for round "
+                << roundNumber);
     std::ifstream ifs(response_file);
     if (ifs.is_open()) {
       json response_json;
       try {
         ifs >> response_json;
-        NS_LOG_INFO("Python API Response (first 200 chars): " << response_json.dump(2).substr(0,200) << "...");
+        NS_LOG_INFO("Python API Response (first 200 chars): "
+                    << response_json.dump(2).substr(0, 200) << "...");
         // Log metrics to accuracy_df
         accuracy_df.addRow(
             {Simulator::Now().GetSeconds(), roundNumber,
@@ -430,31 +451,46 @@ bool triggerAndProcessFLRoundInApi() {
              response_json.value("global_test_loss", 0.0),
              response_json.value("avg_client_accuracy", 0.0),
              response_json.value("avg_client_loss", 0.0),
-             response_json.value("round_duration_seconds", 0.0)
-            });
-        NS_LOG_INFO("Accuracy data added to DataFrame for round " << roundNumber);
+             response_json.value("round_duration_seconds", 0.0)});
+        NS_LOG_INFO("Accuracy data added to DataFrame for round "
+                    << roundNumber);
 
         // Update selected clients info with simulated values from API
-        auto client_perf_details = response_json.value("simulated_client_performance", json::object());
-        NS_LOG_INFO("Updating selected client info with simulated values from API response (" << client_perf_details.size() << " clients)...");
-        for (auto const& [client_id_str, perf_data] : client_perf_details.items()) {
-            try {
-                int client_id = std::stoi(client_id_str);
-                // Find the corresponding client in selectedClientsForCurrentRound
-                for (auto& client_model_info : selectedClientsForCurrentRound) {
-                    if (client_model_info.node->GetId() == (uint32_t)client_id) {
-                        client_model_info.nodeTrainingTime = perf_data.value("simulated_training_time_ms", client_model_info.nodeTrainingTime);
-                        client_model_info.nodeModelSize = perf_data.value("simulated_model_size_bytes", client_model_info.nodeModelSize);
-                        NS_LOG_DEBUG("  Updated client " << client_id << ": training_time=" << client_model_info.nodeTrainingTime << "ms, model_size=" << client_model_info.nodeModelSize << " bytes.");
-                        break; // Found and updated
-                    }
-                }
-            } catch (const std::invalid_argument& ia) { NS_LOG_ERROR("  Failed to parse client ID string: " << client_id_str); }
+        auto client_perf_details =
+            response_json.value("simulated_client_performance", json::object());
+        NS_LOG_INFO("Updating selected client info with simulated values from "
+                    "API response ("
+                    << client_perf_details.size() << " clients)...");
+        for (auto const &[client_id_str, perf_data] :
+             client_perf_details.items()) {
+          try {
+            int client_id = std::stoi(client_id_str);
+            // Find the corresponding client in selectedClientsForCurrentRound
+            for (auto &client_model_info : selectedClientsForCurrentRound) {
+              if (client_model_info.node->GetId() == (uint32_t)client_id) {
+                client_model_info.nodeTrainingTime =
+                    perf_data.value("simulated_training_time_ms",
+                                    client_model_info.nodeTrainingTime);
+                client_model_info.nodeModelSize =
+                    perf_data.value("simulated_model_size_bytes",
+                                    client_model_info.nodeModelSize);
+                NS_LOG_DEBUG("  Updated client "
+                             << client_id << ": training_time="
+                             << client_model_info.nodeTrainingTime
+                             << "ms, model_size="
+                             << client_model_info.nodeModelSize << " bytes.");
+                break; // Found and updated
+              }
+            }
+          } catch (const std::invalid_argument &ia) {
+            NS_LOG_ERROR(
+                "  Failed to parse client ID string: " << client_id_str);
+          }
         }
 
-
       } catch (json::parse_error &e) {
-        NS_LOG_ERROR("ERROR: Failed to parse Python API response JSON from '" << response_file << "': " << e.what());
+        NS_LOG_ERROR("ERROR: Failed to parse Python API response JSON from '"
+                     << response_file << "': " << e.what());
         return false;
       }
     } else {
@@ -463,7 +499,8 @@ bool triggerAndProcessFLRoundInApi() {
     }
     return true;
   } else {
-    NS_LOG_ERROR("ERROR: Python API /run_round call failed. HTTP Code: " << http_code);
+    NS_LOG_ERROR(
+        "ERROR: Python API /run_round call failed. HTTP Code: " << http_code);
     std::ifstream ifs(response_file);
     if (ifs.is_open()) {
       json error_json;
@@ -471,7 +508,8 @@ bool triggerAndProcessFLRoundInApi() {
         ifs >> error_json;
         NS_LOG_ERROR("Python API Error Response: " << error_json.dump(2));
       } catch (json::parse_error &e) {
-        NS_LOG_ERROR("ERROR: Failed to parse Python API error JSON from '" << response_file << "': " << e.what());
+        NS_LOG_ERROR("ERROR: Failed to parse Python API error JSON from '"
+                     << response_file << "': " << e.what());
       }
     }
     return false;
@@ -479,10 +517,12 @@ bool triggerAndProcessFLRoundInApi() {
 }
 
 void sendModelsToServer() { // Uses selectedClientsForCurrentRound
-  NS_LOG_INFO("ns-3: Simulating model uploads for " << selectedClientsForCurrentRound.size() << " selected clients.");
+  NS_LOG_INFO("ns-3: Simulating model uploads for "
+              << selectedClientsForCurrentRound.size() << " selected clients.");
   if (selectedClientsForCurrentRound.empty()) {
-      NS_LOG_INFO("  No clients selected for model upload in ns-3 this round. Skipping send.");
-      return;
+    NS_LOG_INFO("  No clients selected for model upload in ns-3 this round. "
+                "Skipping send.");
+    return;
   }
 
   for (const auto &client_model_info : selectedClientsForCurrentRound) {
@@ -490,10 +530,10 @@ void sendModelsToServer() { // Uses selectedClientsForCurrentRound
     // nodeModelSize and nodeTrainingTime are from clientsInfoGlobal (default
     // values) - NOW UPDATED BY API RESPONSE
     NS_LOG_INFO("  Client " << client_model_info.node->GetId()
-                  << " scheduling ns-3 send model of size "
-                  << client_model_info.nodeModelSize << " bytes "
-                  << "after " << client_model_info.nodeTrainingTime
-                  << "ms pseudo-training time.");
+                            << " scheduling ns-3 send model of size "
+                            << client_model_info.nodeModelSize << " bytes "
+                            << "after " << client_model_info.nodeTrainingTime
+                            << "ms pseudo-training time.");
 
     Simulator::Schedule(MilliSeconds(client_model_info.nodeTrainingTime),
                         &sendStream, client_model_info.node,
@@ -506,37 +546,47 @@ bool isRoundTimedOut(Time roundStartTimeNs3Comms) {
   // Timeout for ns-3 communication phase
   bool timedOut = Simulator::Now() - roundStartTimeNs3Comms > timeout;
   if (timedOut) {
-      NS_LOG_WARN("isRoundTimedOut: ns-3 Comms phase for round " << roundNumber << " has timed out at " << Simulator::Now().GetSeconds() << "s.");
+    NS_LOG_WARN("isRoundTimedOut: ns-3 Comms phase for round "
+                << roundNumber << " has timed out at "
+                << Simulator::Now().GetSeconds() << "s.");
   } else {
-      NS_LOG_DEBUG("isRoundTimedOut: ns-3 Comms phase for round " << roundNumber << " is not yet timed out. Current duration: " << (Simulator::Now() - roundStartTimeNs3Comms).GetSeconds() << "s.");
+    NS_LOG_DEBUG("isRoundTimedOut: ns-3 Comms phase for round "
+                 << roundNumber << " is not yet timed out. Current duration: "
+                 << (Simulator::Now() - roundStartTimeNs3Comms).GetSeconds()
+                 << "s.");
   }
   return timedOut;
 }
 
 void logRoundTimeout() {
-  NS_LOG_WARN("ns-3 Comms Round timed out for round " << roundNumber << ". Successful transfers: "
-      << endOfStreamTimes.size() << "/"
-      << selectedClientsForCurrentRound.size() << " clients.");
+  NS_LOG_WARN("ns-3 Comms Round timed out for round "
+              << roundNumber
+              << ". Successful transfers: " << endOfStreamTimes.size() << "/"
+              << selectedClientsForCurrentRound.size() << " clients.");
 }
 
 void addParticipationToDataFrame() {
-  NS_LOG_INFO("Adding participation data to DataFrame for round " << roundNumber << ".");
+  NS_LOG_INFO("Adding participation data to DataFrame for round " << roundNumber
+                                                                  << ".");
   participation_df.addRow({Simulator::Now().GetSeconds(), roundNumber,
                            (uint32_t)selectedClientsForCurrentRound.size(),
                            (uint32_t)endOfStreamTimes.size()});
-  NS_LOG_INFO("  Recorded selected: " << selectedClientsForCurrentRound.size() << ", completed ns-3 comms: " << endOfStreamTimes.size());
+  NS_LOG_INFO("  Recorded selected: " << selectedClientsForCurrentRound.size()
+                                      << ", completed ns-3 comms: "
+                                      << endOfStreamTimes.size());
 }
 
 // This finalize is for the ns-3 communication part of the round
 void finalizeNs3CommsPhase() {
   NS_LOG_INFO("ns-3 Comms phase for round "
-      << roundNumber << " finished at " << Simulator::Now().GetSeconds()
-      << ". Successful transfers: " << endOfStreamTimes.size() << "/"
-      << selectedClientsForCurrentRound.size());
+              << roundNumber << " finished at " << Simulator::Now().GetSeconds()
+              << ". Successful transfers: " << endOfStreamTimes.size() << "/"
+              << selectedClientsForCurrentRound.size());
 
   addParticipationToDataFrame();
   roundCleanup(); // Clears ns-3 apps and endOfStreamTimes
-  NS_LOG_INFO("ns-3 Comms phase cleanup complete for round " << roundNumber << ".");
+  NS_LOG_INFO("ns-3 Comms phase cleanup complete for round " << roundNumber
+                                                             << ".");
 }
 
 void startNewFLRound(
@@ -545,14 +595,17 @@ void startNewFLRound(
 {
   roundNumber++;
   NS_LOG_INFO("StartNewFLRound: Beginning for FL Round "
-      << roundNumber << " at " << Simulator::Now().GetSeconds() << "s.");
+              << roundNumber << " at " << Simulator::Now().GetSeconds()
+              << "s.");
 
   selectNs3ManagedClients(FL_API_CLIENTS_PER_ROUND);
-  NS_LOG_INFO("StartNewFLRound: ns-3 selected " << selectedClientsForCurrentRound.size()
-                                        << " clients for this round.");
+  NS_LOG_INFO("StartNewFLRound: ns-3 selected "
+              << selectedClientsForCurrentRound.size()
+              << " clients for this round.");
 
   if (selectedClientsForCurrentRound.empty() && FL_API_CLIENTS_PER_ROUND > 0) {
-    NS_LOG_INFO("StartNewFLRound: No clients were selected by ns-3 (e.g., due to SINR "
+    NS_LOG_INFO(
+        "StartNewFLRound: No clients were selected by ns-3 (e.g., due to SINR "
         "or other criteria, or no eligible UEs). Skipping API call and ns-3 "
         "comms for this round.");
     roundFinished = true; // Mark as finished to allow manager to proceed
@@ -560,32 +613,36 @@ void startNewFLRound(
   }
 
   NS_LOG_INFO("StartNewFLRound: Triggering FL round in Python API for round "
-      << roundNumber);
+              << roundNumber);
   bool api_success = triggerAndProcessFLRoundInApi(); // This calls Python API
   // triggerAndProcessFLRoundInApi now UPDATES selectedClientsForCurrentRound
   // with actual sim_training_time and sim_model_size from the API response
 
   if (api_success) {
     NS_LOG_INFO("StartNewFLRound: Python API call successful for round "
-        << roundNumber);
+                << roundNumber);
     if (!selectedClientsForCurrentRound.empty()) {
       NS_LOG_INFO("StartNewFLRound: Scheduling ns-3 model uploads for "
-          << selectedClientsForCurrentRound.size() << " clients with updated times/sizes.");
-      sendModelsToServer(); // Schedules ns-3 MyApp instances using the updated info
+                  << selectedClientsForCurrentRound.size()
+                  << " clients with updated times/sizes.");
+      sendModelsToServer(); // Schedules ns-3 MyApp instances using the updated
+                            // info
       roundStartTimeNs3CommsParam =
           Simulator::Now();  // Mark start of ns-3 communication phase
       roundFinished = false; // ns-3 communication phase now active
       NS_LOG_INFO("StartNewFLRound: ns-3 comms phase started for round "
-          << roundNumber << " at " << roundStartTimeNs3CommsParam.GetSeconds() << "s. roundFinished set to false.");
+                  << roundNumber << " at "
+                  << roundStartTimeNs3CommsParam.GetSeconds()
+                  << "s. roundFinished set to false.");
     } else {
       NS_LOG_INFO("StartNewFLRound: Python API call successful, but no clients "
-          "selected by ns-3 for simulated upload. Marking round as "
-          "(comms-wise) finished.");
+                  "selected by ns-3 for simulated upload. Marking round as "
+                  "(comms-wise) finished.");
       roundFinished = true; // No ns-3 comms to simulate
     }
   } else {
     NS_LOG_ERROR("StartNewFLRound: Python API call FAILED for round "
-        << roundNumber << ". Skipping ns-3 comms phase.");
+                 << roundNumber << ". Skipping ns-3 comms phase.");
     roundFinished = true; // Mark as finished to allow manager to try next FL
                           // round attempt (or stop if max rounds)
   }
@@ -604,19 +661,20 @@ void manager() {
   static Time roundStartTimeNs3Comms =
       Simulator::Now(); // Initialize to current time at first call
   NS_LOG_INFO("Manager called at " << Simulator::Now().GetSeconds()
-                           << "s. RoundNumber: " << roundNumber
-                           << ", roundFinished (ns-3 comms): "
-                           << (roundFinished ? "true" : "false"));
+                                   << "s. RoundNumber: " << roundNumber
+                                   << ", roundFinished (ns-3 comms): "
+                                   << (roundFinished ? "true" : "false"));
 
   if (!fl_api_initialized) {
-    NS_LOG_INFO("Manager: FL API not yet initialized by main. Manager waiting for 5 seconds.");
+    NS_LOG_INFO("Manager: FL API not yet initialized by main. Manager waiting "
+                "for 5 seconds.");
     Simulator::Schedule(Seconds(5.0), &manager);
     return;
   }
 
   if (!roundFinished) {
-    NS_LOG_INFO("Manager: ns-3 communication phase for round " << roundNumber
-                                                       << " is ongoing.");
+    NS_LOG_INFO("Manager: ns-3 communication phase for round "
+                << roundNumber << " is ongoing.");
     if (isRoundTimedOut(roundStartTimeNs3Comms)) {
       NS_LOG_WARN("Manager: Round " << roundNumber << " ns-3 comms timed out.");
       logRoundTimeout(); // Logs successful transfers vs selected
@@ -631,47 +689,44 @@ void manager() {
             !endOfStreamTimes
                  .empty()) { // Avoid logging if no comms were even scheduled
           NS_LOG_INFO("Manager: All selected clients ("
-              << endOfStreamTimes.size() << "/"
-              << selectedClientsForCurrentRound.size()
-              << ") completed ns-3 transmissions for round " << roundNumber);
+                      << endOfStreamTimes.size() << "/"
+                      << selectedClientsForCurrentRound.size()
+                      << ") completed ns-3 transmissions for round "
+                      << roundNumber);
         } else if (selectedClientsForCurrentRound.empty()) {
-          NS_LOG_INFO("Manager: No clients were selected for ns-3 comms in round "
+          NS_LOG_INFO(
+              "Manager: No clients were selected for ns-3 comms in round "
               << roundNumber << ", considering comms phase complete.");
         }
         roundFinished = true;
       } else {
-        NS_LOG_INFO("Manager: Waiting for "
+        NS_LOG_INFO(
+            "Manager: Waiting for "
             << selectedClientsForCurrentRound.size() - endOfStreamTimes.size()
             << " more clients to finish ns-3 comms for round " << roundNumber);
       }
     }
 
     if (roundFinished) {
-      NS_LOG_INFO("Manager: Finalizing ns-3 comms phase for round " << roundNumber);
+      NS_LOG_INFO("Manager: Finalizing ns-3 comms phase for round "
+                  << roundNumber);
       finalizeNs3CommsPhase(); // Logs, adds to participation_df, cleans up apps
     }
   }
 
   if (roundFinished) {
     NS_LOG_INFO("Manager: ns-3 communication phase for round "
-        << roundNumber << " is finished or was skipped.");
-    if (roundNumber < 5) // Limit total FL rounds for testing
-    {
-      NS_LOG_INFO("Manager: Attempting to start new FL round (will be round "
-          << roundNumber + 1 << ")");
-      startNewFLRound(roundStartTimeNs3Comms); // This will attempt to set
-                                               // roundFinished=false
-    } else {
-      NS_LOG_INFO("Manager: Max FL rounds (5) reached. Stopping simulation.");
-      exportDataFrames();
-      Simulator::Stop();
-      return;
-    }
+                << roundNumber << " is finished or was skipped.");
+
+    startNewFLRound(roundStartTimeNs3Comms); // This will attempt to set
+                                             // roundFinished=false
+    exportDataFrames();
   }
 
   // Always schedule next manager check if simulation hasn't stopped
   if (!Simulator::IsFinished()) {
-    NS_LOG_INFO("Manager: Scheduling next call in " << managerInterval << " seconds.");
+    NS_LOG_INFO("Manager: Scheduling next call in " << managerInterval
+                                                    << " seconds.");
     Simulator::Schedule(Seconds(managerInterval), &manager);
   } else {
     NS_LOG_INFO("Manager: Simulation is finished, not scheduling next call.");
@@ -679,6 +734,17 @@ void manager() {
 }
 
 void ConfigureDefaults() {
+  // LTE RLC (Radio Link Control) Configuration
+  const uint32_t maxTxBufferSizeUm = 10 * 1024 * 1024 * 10;
+  const uint32_t maxTxBufferSizeAm = 10 * 1024 * 1024;
+  const uint32_t maxTxBufferSizeLowLat = 10 * 1024 * 1024;
+
+  Config::SetDefault("ns3::LteRlcUm::MaxTxBufferSize",
+                     UintegerValue(maxTxBufferSizeUm));
+  Config::SetDefault("ns3::LteRlcAm::MaxTxBufferSize",
+                     UintegerValue(maxTxBufferSizeAm));
+  Config::SetDefault("ns3::LteRlcUmLowLat::MaxTxBufferSize",
+                     UintegerValue(maxTxBufferSizeLowLat));
   Config::SetDefault("ns3::TcpL4Protocol::SocketType",
                      TypeIdValue(TcpCubic::GetTypeId()));
   Config::SetDefault("ns3::TcpSocketBase::MinRto",
@@ -703,22 +769,22 @@ void ConfigureDefaults() {
 int main(int argc, char *argv[]) {
   // Enable logging for components
   LogComponentEnable("Simulation", LOG_LEVEL_INFO);
-  // LogComponentEnable("MyApp", LOG_LEVEL_DEBUG); // Increased logging for MyApp
+  LogComponentEnable("MyApp", LOG_LEVEL_DEBUG); // Increased logging for
+  // MyApp
   LogComponentEnable("Utils", LOG_LEVEL_INFO);
   LogComponentEnable("ClientTypes", LOG_LEVEL_INFO);
   LogComponentEnable("DataFrame", LOG_LEVEL_DEBUG); // DataFrame can be chatty
-  LogComponentEnable("Notifications", LOG_LEVEL_INFO); // Keep connection logs visible
-  // LogComponentEnable("TcpSocket", LOG_LEVEL_DEBUG); // Increased logging for Sockets
-  // LogComponentEnable("TcpSocketBase", LOG_LEVEL_DEBUG); // Even more socket detail
-  // LogComponentEnable("Ipv4L3Protocol", LOG_LEVEL_DEBUG); // Logging for network layer issues
-  // Uncomment for very detailed debug logs:
+  LogComponentEnable("Notifications",LOG_LEVEL_INFO); // Keep connection logs visible
+  LogComponentEnable("TcpSocket", LOG_LEVEL_DEBUG); // Increased logging for Sockets 
+  LogComponentEnable("TcpSocketBase", LOG_LEVEL_DEBUG); // Even more
+  // socket detail LogComponentEnable("Ipv4L3Protocol", LOG_LEVEL_DEBUG); //
+  // Logging for network layer issues Uncomment for very detailed debug logs:
   // LogComponentEnable("Simulation", LOG_LEVEL_DEBUG);
   // LogComponentEnable("MyApp", LOG_LEVEL_DEBUG);
   // LogComponentEnable("Utils", LOG_LEVEL_DEBUG);
   // LogComponentEnable("ClientTypes", LOG_LEVEL_DEBUG);
   // LogComponentEnable("DataFrame", LOG_LEVEL_DEBUG);
   // LogComponentEnable("Notifications", LOG_LEVEL_DEBUG);
-
 
   // Configure defaults for the simulation
   ConfigureDefaults();
@@ -733,11 +799,12 @@ int main(int argc, char *argv[]) {
   NS_LOG_INFO("Attempting to start Python FL API server...");
   int ret = system("python3 scratch/fl_api.py > fl_api.log 2>&1 &");
   if (ret != 0) {
-    NS_LOG_ERROR("ERROR: Failed to start Python FL API server. Exit code: " << ret);
+    NS_LOG_ERROR(
+        "ERROR: Failed to start Python FL API server. Exit code: " << ret);
     // return 1; // Can't proceed if API server fails to start
   }
   NS_LOG_INFO("Python FL API server started (hopefully). Waiting for it to "
-      "initialize (10s delay)...");
+              "initialize (10s delay)...");
   sleep(10); // Give server time to start up. Robust: poll an endpoint.
 
   // --- Configure and Initialize Python FL API ---
@@ -751,19 +818,25 @@ int main(int argc, char *argv[]) {
   fl_config_payload["batch_size"] = 32;
   // Add other relevant FL_STATE['config'] parameters from Python API
 
-  int http_code = callPythonApi("/configure", "POST", fl_config_payload.dump()); // <-- Declared http_code here
+  int http_code =
+      callPythonApi("/configure", "POST",
+                    fl_config_payload.dump()); // <-- Declared http_code here
   if (http_code != 200) {
-    NS_LOG_ERROR("ERROR: Failed to configure Python FL API. HTTP Code: " << http_code);
+    NS_LOG_ERROR(
+        "ERROR: Failed to configure Python FL API. HTTP Code: " << http_code);
     // return 1;
   } else {
     NS_LOG_INFO("Python FL API configured successfully.");
   }
   sleep(1);
 
-  NS_LOG_INFO("Initializing Python FL API simulation (data loading, initial model)...");
-  http_code = callPythonApi("/initialize_simulation", "POST"); // <-- Re-used http_code variable
+  NS_LOG_INFO(
+      "Initializing Python FL API simulation (data loading, initial model)...");
+  http_code = callPythonApi("/initialize_simulation",
+                            "POST"); // <-- Re-used http_code variable
   if (http_code != 200) {
-    NS_LOG_ERROR("ERROR: Failed to initialize Python FL API simulation. HTTP Code: "
+    NS_LOG_ERROR(
+        "ERROR: Failed to initialize Python FL API simulation. HTTP Code: "
         << http_code);
     // return 1;
   } else {
@@ -788,8 +861,8 @@ int main(int argc, char *argv[]) {
   Ptr<Node> remoteHost = remoteHostContainer.Get(0);
   InternetStackHelper internet;
   internet.Install(remoteHostContainer);
-  NS_LOG_INFO("PGW and RemoteHost created and InternetStack installed on RemoteHost.");
-
+  NS_LOG_INFO(
+      "PGW and RemoteHost created and InternetStack installed on RemoteHost.");
 
   PointToPointHelper p2ph;
   p2ph.SetDeviceAttribute("DataRate", DataRateValue(DataRate("10Gb/s")));
@@ -800,7 +873,9 @@ int main(int argc, char *argv[]) {
   ipv4h.SetBase("1.0.0.0", "255.0.0.0");
   Ipv4InterfaceContainer internetIpIfaces = ipv4h.Assign(internetDevices);
   remoteHostAddr = internetIpIfaces.GetAddress(1);
-  NS_LOG_INFO("Point-to-Point link between PGW and RemoteHost configured. RemoteHost IP: " << remoteHostAddr);
+  NS_LOG_INFO("Point-to-Point link between PGW and RemoteHost configured. "
+              "RemoteHost IP: "
+              << remoteHostAddr);
 
   Ipv4StaticRoutingHelper ipv4RoutingHelper;
   Ptr<Ipv4StaticRouting> remoteHostStaticRouting =
@@ -811,54 +886,72 @@ int main(int argc, char *argv[]) {
 
   enbNodes.Create(numberOfEnbs);
   ueNodes.Create(numberOfUes);
-  NS_LOG_INFO("Created " << numberOfEnbs << " eNBs and " << numberOfUes << " UEs.");
+  NS_LOG_INFO("Created " << numberOfEnbs << " eNBs and " << numberOfUes
+                         << " UEs.");
 
-MobilityHelper enbmobility;
+  MobilityHelper enbmobility;
   // Use RandomRectanglePositionAllocator for random eNB distribution
   Ptr<RandomRectanglePositionAllocator> enbPositionAlloc =
       CreateObject<RandomRectanglePositionAllocator>();
   // Set bounds to the scenario size
-  std::string enbBounds = "0|" + std::to_string(scenarioSize) + "|0|" + std::to_string(scenarioSize);
-  enbPositionAlloc->SetAttribute("X", StringValue("ns3::UniformRandomVariable[Min=0.0|Max=" + std::to_string(scenarioSize) + "]"));
-  enbPositionAlloc->SetAttribute("Y", StringValue("ns3::UniformRandomVariable[Min=0.0|Max=" + std::to_string(scenarioSize) + "]"));
-  // Z is 0 by default for 2D allocators, explicitly set if needed, but usually not for typical ground scenarios
+  std::string enbBounds = "0|" + std::to_string(scenarioSize) + "|0|" +
+                          std::to_string(scenarioSize);
+  enbPositionAlloc->SetAttribute(
+      "X", StringValue("ns3::UniformRandomVariable[Min=0.0|Max=" +
+                       std::to_string(scenarioSize) + "]"));
+  enbPositionAlloc->SetAttribute(
+      "Y", StringValue("ns3::UniformRandomVariable[Min=0.0|Max=" +
+                       std::to_string(scenarioSize) + "]"));
+  // Z is 0 by default for 2D allocators, explicitly set if needed, but usually
+  // not for typical ground scenarios
 
   enbmobility.SetMobilityModel("ns3::ConstantPositionMobilityModel");
   enbmobility.SetPositionAllocator(enbPositionAlloc);
   enbmobility.Install(enbNodes);
-  NS_LOG_INFO("eNBs installed with ConstantPositionMobilityModel and random positions within scenario size.");
+  NS_LOG_INFO("eNBs installed with ConstantPositionMobilityModel and random "
+              "positions within scenario size.");
 
   // --- UE MOBILITY SETUP (Conditional) ---
   MobilityHelper uemobility;
   if (useStaticClients) {
-      NS_LOG_INFO("Installing ConstantPositionMobilityModel for static UEs with random positions.");
-      uemobility.SetMobilityModel("ns3::ConstantPositionMobilityModel");
-      // Use RandomRectanglePositionAllocator for static UE distribution
-      Ptr<RandomRectanglePositionAllocator> uePositionAlloc = CreateObject<RandomRectanglePositionAllocator>();
-      // Set bounds to the scenario size
-      std::string ueBounds = "0|" + std::to_string(scenarioSize) + "|0|" + std::to_string(scenarioSize);
-      uePositionAlloc->SetAttribute("X", StringValue("ns3::UniformRandomVariable[Min=0.0|Max=" + std::to_string(scenarioSize) + "]"));
-      uePositionAlloc->SetAttribute("Y", StringValue("ns3::UniformRandomVariable[Min=0.0|Max=" + std::to_string(scenarioSize) + "]"));
+    NS_LOG_INFO("Installing ConstantPositionMobilityModel for static UEs with "
+                "random positions.");
+    uemobility.SetMobilityModel("ns3::ConstantPositionMobilityModel");
+    // Use RandomRectanglePositionAllocator for static UE distribution
+    Ptr<RandomRectanglePositionAllocator> uePositionAlloc =
+        CreateObject<RandomRectanglePositionAllocator>();
+    // Set bounds to the scenario size
+    std::string ueBounds = "0|" + std::to_string(scenarioSize) + "|0|" +
+                           std::to_string(scenarioSize);
+    uePositionAlloc->SetAttribute(
+        "X", StringValue("ns3::UniformRandomVariable[Min=0.0|Max=" +
+                         std::to_string(scenarioSize) + "]"));
+    uePositionAlloc->SetAttribute(
+        "Y", StringValue("ns3::UniformRandomVariable[Min=0.0|Max=" +
+                         std::to_string(scenarioSize) + "]"));
 
-      uemobility.SetPositionAllocator(uePositionAlloc);
-      uemobility.Install(ueNodes);
-      NS_LOG_INFO("Static UEs installed with ConstantPositionMobilityModel and random positions within scenario size.");
+    uemobility.SetPositionAllocator(uePositionAlloc);
+    uemobility.Install(ueNodes);
+    NS_LOG_INFO("Static UEs installed with ConstantPositionMobilityModel and "
+                "random positions within scenario size.");
   } else {
-      NS_LOG_INFO("Installing RandomWalk2dMobilityModel for mobile UEs.");
-      // Keep Random Walk for UEs, update bounds to use scenarioSize
-      std::string walkBounds = "0|" + std::to_string(scenarioSize) + "|0|" + std::to_string(scenarioSize);
-      uemobility.SetMobilityModel(
-          "ns3::RandomWalk2dMobilityModel", "Mode", StringValue("Time"), "Time",
-          StringValue("2s"), "Speed",
-          StringValue("ns3::ConstantRandomVariable[Constant=20.0]"), // 20 m/s
-          "Bounds", StringValue(walkBounds)); // Bounds based on scenarioSize
-      uemobility.Install(ueNodes);
-      NS_LOG_INFO("Mobile UEs installed with RandomWalk2dMobilityModel within scenario size bounds.");
+    NS_LOG_INFO("Installing RandomWalk2dMobilityModel for mobile UEs.");
+    // Keep Random Walk for UEs, update bounds to use scenarioSize
+    std::string walkBounds = "0|" + std::to_string(scenarioSize) + "|0|" +
+                             std::to_string(scenarioSize);
+    uemobility.SetMobilityModel(
+        "ns3::RandomWalk2dMobilityModel", "Mode", StringValue("Time"), "Time",
+        StringValue("2s"), "Speed",
+        StringValue("ns3::ConstantRandomVariable[Constant=20.0]"), // 20 m/s
+        "Bounds", StringValue(walkBounds)); // Bounds based on scenarioSize
+    uemobility.Install(ueNodes);
+    NS_LOG_INFO("Mobile UEs installed with RandomWalk2dMobilityModel within "
+                "scenario size bounds.");
   }
 
-
   // Install on PGW and RemoteHost too for NetAnim
-  enbmobility.Install(pgw); // PGW mobility setup is simpler, can reuse enbmobility
+  enbmobility.Install(
+      pgw); // PGW mobility setup is simpler, can reuse enbmobility
   enbmobility.Install(remoteHost); // RemoteHost is static
   NS_LOG_INFO("Mobility models installed on PGW and RemoteHost for NetAnim.");
 
@@ -867,7 +960,8 @@ MobilityHelper enbmobility;
   internet.Install(ueNodes);
   epcHelper->AssignUeIpv4Address(NetDeviceContainer(ueDevs));
   mmwaveHelper->AttachToClosestEnb(ueDevs, enbDevs); // Initial attachment
-  NS_LOG_INFO("eNB and UE devices installed. UE IP addresses assigned. UEs attached to closest eNB.");
+  NS_LOG_INFO("eNB and UE devices installed. UE IP addresses assigned. UEs "
+              "attached to closest eNB.");
 
   for (uint32_t i = 0; i < ueNodes.GetN(); i++) {
     Ptr<Node> ueNode = ueNodes.Get(i);
@@ -926,40 +1020,40 @@ MobilityHelper enbmobility;
   NS_LOG_INFO("LTE ConnectionEstablished trace sources connected.");
 
   Simulator::Stop(Seconds(simStopTime));
-  NS_LOG_INFO("Starting ns-3 Simulation. Simulation will stop at " << simStopTime << "s.");
+  NS_LOG_INFO("Starting ns-3 Simulation. Simulation will stop at "
+              << simStopTime << "s.");
   Simulator::Run();
   NS_LOG_INFO("ns-3 Simulation Finished.");
 
-// ... (existing code)
+  // ... (existing code)
 
-// --- Clean up ---
-NS_LOG_INFO("Stopping Python FL API server...");
+  // --- Clean up ---
+  NS_LOG_INFO("Stopping Python FL API server...");
 
-// Safer process termination using PID file tracking
-int kill_status = system("pkill -f 'python3 scratch/sim/fl_api.py'");
+  // Safer process termination using PID file tracking
+  int kill_status = system("pkill -f 'python3 scratch/sim/fl_api.py'");
 
-// Handle command execution status
-if (kill_status == -1) {
+  // Handle command execution status
+  if (kill_status == -1) {
     NS_LOG_ERROR("Failed to execute pkill command: " << std::strerror(errno));
-} else {
+  } else {
     // Decode exit status (Unix-specific handling)
     if (WIFEXITED(kill_status)) {
-        const int exit_code = WEXITSTATUS(kill_status);
-        if (exit_code == 0) {
-            NS_LOG_INFO("Successfully terminated Python FL API server");
-        } else if (exit_code == 1) {
-            NS_LOG_WARN("Python server not found (already terminated?)");
-        } else {
-            NS_LOG_WARN("pkill exited abnormally (code: " << exit_code << ")");
-        }
+      const int exit_code = WEXITSTATUS(kill_status);
+      if (exit_code == 0) {
+        NS_LOG_INFO("Successfully terminated Python FL API server");
+      } else if (exit_code == 1) {
+        NS_LOG_WARN("Python server not found (already terminated?)");
+      } else {
+        NS_LOG_WARN("pkill exited abnormally (code: " << exit_code << ")");
+      }
     } else {
-        NS_LOG_WARN("pkill terminated by signal: " << WTERMSIG(kill_status));
+      NS_LOG_WARN("pkill terminated by signal: " << WTERMSIG(kill_status));
     }
-}
+  }
 
-exportDataFrames(); // Final export
-Simulator::Destroy();
-NS_LOG_INFO("Simulator Destroyed.");
-return 0;
-
+  exportDataFrames(); // Final export
+  Simulator::Destroy();
+  NS_LOG_INFO("Simulator Destroyed.");
+  return 0;
 }

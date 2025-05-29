@@ -94,19 +94,22 @@ void MyApp::SendPacket() {
         NS_LOG_DEBUG("MyApp SendPacket: Sending data packet (num " << m_packetsSent + 1 << "/" << m_nPackets << ") of size " << m_writeSize << ".");
     }
 
-    int bytesSent = m_socket->Send(packet);
-    if (bytesSent < 0) {
-        NS_LOG_ERROR("MyApp SendPacket: Error sending packet. Bytes sent: " << bytesSent);
+    // --- CORRECTED ERROR HANDLING ---
+    ssize_t bytesSent = m_socket->Send(packet); // Use ssize_t to get the correct return value
+
+    if (bytesSent < 0) { // Check if the signed return value is negative
+        NS_LOG_ERROR("MyApp SendPacket: Error sending packet. Socket error: " << m_socket->GetErrno() << " at " << Simulator::Now().GetSeconds() << "s."); // Log the specific socket error
         // Consider stopping the application or implementing error handling/retry logic
-        // StopApplication(); 
-    } else if (bytesSent != (int)m_writeSize) {
-        NS_LOG_WARN("MyApp SendPacket: Sent " << bytesSent << " bytes, expected " << m_writeSize << " bytes. Possible partial send.");
-        // Depending on the transport protocol and ns-3 version, Send might return
-        // less than the requested size for various reasons (e.g., buffer full).
-        // For TCP, it often sends the whole packet or returns -1.
+        // StopApplication(); // Uncomment this line if you want the application to stop on send error
+    } else if ((uint32_t)bytesSent != m_writeSize) { // Compare with the expected size (casting bytesSent to uint32_t for comparison with m_writeSize which is uint64_t, ensure compatibility or cast m_writeSize if appropriate)
+         // Note: A partial send might occur if the socket buffer cannot hold the entire packet.
+         // Given TCP and a writeSize <= MSS, this is less common than a -1 error for buffer full.
+         // The error code check above is more likely for a buffer full scenario in NS-3 TCP.
+         NS_LOG_WARN("MyApp SendPacket: Sent " << bytesSent << " bytes, expected " << m_writeSize << " bytes. Possible partial send or queuing issue at " << Simulator::Now().GetSeconds() << "s.");
     } else {
-        NS_LOG_DEBUG("MyApp SendPacket: Successfully sent " << bytesSent << " bytes.");
+        NS_LOG_DEBUG("MyApp SendPacket: Successfully sent " << bytesSent << " bytes at " << Simulator::Now().GetSeconds() << "s.");
     }
+    // --- END CORRECTED ERROR HANDLING ---
 
 
     ++m_packetsSent;
@@ -115,7 +118,7 @@ void MyApp::SendPacket() {
     if (m_packetsSent < m_nPackets) {
         ScheduleTx();
     } else {
-        NS_LOG_INFO("MyApp SendPacket: All " << m_nPackets << " packets sent for this stream. MyApp task complete.");
+        NS_LOG_INFO("MyApp SendPacket: All " << m_nPackets << " packets sent for this stream. MyApp task complete at " << Simulator::Now().GetSeconds() << "s.");
         // Application should stop itself or be stopped by the simulation manager
         // Simulator::ScheduleNow(&MyApp::StopApplication, this); // Self-stop
     }

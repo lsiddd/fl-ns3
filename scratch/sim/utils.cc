@@ -241,7 +241,7 @@ void sendStream(Ptr<Node> sendingNode, Ptr<Node> receivingNode, int size)
     NS_LOG_INFO("sendStream: Called with sendingNode=" << (sendingNode ? sendingNode->GetId() : 0)
                                                 << ", receivingNode=" << (receivingNode ? receivingNode->GetId() : 0)
                                                 << ", size=" << size << " bytes.");
-    
+
     if (!sendingNode || !receivingNode) {
         NS_LOG_ERROR("sendStream: One or both nodes are null. Sending Node: " << sendingNode << ", Receiving Node: " << receivingNode << ". Aborting stream setup.");
         return;
@@ -260,7 +260,7 @@ void sendStream(Ptr<Node> sendingNode, Ptr<Node> receivingNode, int size)
     }
 
     uint32_t nPackets = (size + writeSize - 1) / writeSize;
-    if (nPackets == 0 && size > 0) { 
+    if (nPackets == 0 && size > 0) {
         nPackets = 1; // For very small sizes less than writeSize, still send 1 packet.
         NS_LOG_DEBUG("sendStream: Size " << size << " is less than writeSize " << writeSize << ", adjusting nPackets to 1.");
     } else if (nPackets > 0 && size % writeSize == 0) {
@@ -278,7 +278,7 @@ void sendStream(Ptr<Node> sendingNode, Ptr<Node> receivingNode, int size)
         NS_LOG_ERROR("sendStream: No Ipv4 object found on receiving node " << receivingNode->GetId() << ". Cannot determine destination IP. Aborting.");
         return;
     }
-    
+
     // RemoteHost/FL Server should be on interface 0 (default loopback/first P2P interface)
     // or interface 1 if it has loopback and P2P
     // Let's assume the correct interface for remoteHost (FL server) is the one connected to PGW
@@ -297,16 +297,21 @@ void sendStream(Ptr<Node> sendingNode, Ptr<Node> receivingNode, int size)
 
     NS_LOG_INFO(Simulator::Now().GetSeconds()
         <<"s: Node " << sendingNode->GetId() << " starting stream to "
-        <<receivingNode->GetId() << " (" << ipAddrReceiver << ":" << current_port << "), " << size << " bytes, " 
+        <<receivingNode->GetId() << " (" << ipAddrReceiver << ":" << current_port << "), " << size << " bytes, "
         <<nPackets << " packets, each up to " << writeSize << " payload bytes.");
 
     Address sinkAddress(InetSocketAddress(ipAddrReceiver, current_port));
     PacketSinkHelper packetSinkHelper("ns3::TcpSocketFactory", InetSocketAddress(Ipv4Address::GetAny(), current_port));
     NS_LOG_DEBUG("sendStream: Installing TCP PacketSink on Node " << receivingNode->GetId() << " at " << InetSocketAddress(Ipv4Address::GetAny(), current_port));
     ApplicationContainer sinkApps = packetSinkHelper.Install(receivingNode);
-    sinkApps.Start(Simulator::Now());
-    NS_LOG_INFO("sendStream: PacketSink application started at " << Simulator::Now().GetSeconds() << "s on Node " << receivingNode->GetId() << ".");
-    
+
+    // --- ADDED DELAY FOR SINK START TIME ---
+    Time streamStartTime = MilliSeconds(200); // Start stream apps 200ms after scheduling
+    sinkApps.Start(streamStartTime);
+    // --- END ADDED DELAY ---
+
+    NS_LOG_INFO("sendStream: PacketSink application scheduled to start at " << streamStartTime.GetSeconds() << "s on Node " << receivingNode->GetId() << ".");
+
     if (sinkApps.GetN() == 0) {
         NS_LOG_ERROR("sendStream: Failed to install PacketSink on Node " << receivingNode->GetId() << ". Aborting.");
         return;
@@ -331,14 +336,19 @@ void sendStream(Ptr<Node> sendingNode, Ptr<Node> receivingNode, int size)
     NS_LOG_DEBUG("sendStream: Creating MyApp application object.");
     Ptr<MyApp> app = CreateObject<MyApp>();
     NS_LOG_INFO("sendStream: Setting up MyApp on Node " << sendingNode->GetId() << " to send to " << sinkAddress
-                <<", packetSizeForScheduling=" << writeSize << ", nPackets=" << nPackets 
-                <<", dataRate=10Mbps, actualSendSize=" << writeSize << " bytes.");
-    app->Setup(ns3TcpSocket, sinkAddress, writeSize, nPackets, DataRate("10Mbps"), writeSize, data, dataFin);
-    
+                <<", packetSizeForScheduling=" << writeSize << ", nPackets=" << nPackets
+                <<", dataRate=1Mbps, actualSendSize=" << writeSize << " bytes.");
+    app->Setup(ns3TcpSocket, sinkAddress, writeSize, nPackets, DataRate("1Mbps"), writeSize, data, dataFin);
+
     sendingNode->AddApplication(app);
     NS_LOG_DEBUG("sendStream: MyApp added to Node " << sendingNode->GetId());
-    app->SetStartTime(Simulator::Now());
-    NS_LOG_INFO("sendStream: MyApp started at " << Simulator::Now().GetSeconds() << "s on Node " << sendingNode->GetId());
+
+    // --- ADDED DELAY FOR MYAPP START TIME ---
+    // Start MyApp at the same time as the sink
+    app->SetStartTime(streamStartTime);
+    // --- END ADDED DELAY ---
+
+    NS_LOG_INFO("sendStream: MyApp scheduled to start at " << streamStartTime.GetSeconds() << "s on Node " << sendingNode->GetId());
 }
 
 std::streamsize getFileSize(const std::string &filename)
