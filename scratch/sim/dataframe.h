@@ -1,5 +1,4 @@
-#ifndef DATAFRAME_H
-#define DATAFRAME_H
+#pragma once
 
 #include <iostream>
 #include <vector>
@@ -45,5 +44,3 @@ private:
     // Helper function to convert variant to string
     std::string variantToString(const DataFrameElement& element) const;
 };
-
-#endif // DATAFRAME_H

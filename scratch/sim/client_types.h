@@ -1,5 +1,4 @@
-#ifndef SIM_CLIENT_TYPES_H
-#define SIM_CLIENT_TYPES_H
+#pragma once
 
 #include "ns3/command-line.h"
 #include "ns3/config-store-module.h"
@@ -43,5 +42,3 @@ struct NodesIps {
 
     NodesIps(int n, int i, Ipv4Address ia);
 };
-
-#endif

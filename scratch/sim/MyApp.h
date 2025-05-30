@@ -1,5 +1,4 @@
-#ifndef MY_APP_H
-#define MY_APP_H
+#pragma once
 
 #include "ns3/application.h"
 #include "ns3/socket.h"
@@ -40,5 +39,3 @@ private:
     uint64_t m_writeSize; // Actual size of payload for each packet
 
 };
-
-#endif

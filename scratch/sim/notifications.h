@@ -1,5 +1,4 @@
-#ifndef SIM_NOTIFICATIONS_H
-#define SIM_NOTIFICATIONS_H
+#pragma once
 
 #include "ns3/command-line.h"
 #include "ns3/config-store-module.h"
@@ -41,5 +40,3 @@ NotifyHandoverStartEnb(std::string context, // Keep context for now, check trace
 void
 NotifyHandoverEndOkEnb(std::string context, // Keep context for now, check trace if error occurs
                        uint64_t imsi, uint16_t cellid, uint16_t rnti);
-
-#endif

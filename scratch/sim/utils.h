@@ -1,5 +1,4 @@
-#ifndef SIM_UTILS_H
-#define SIM_UTILS_H
+#pragma once
 
 // Include necessary libraries and modules
 #include "client_types.h"
@@ -64,5 +63,3 @@ bool checkFinishedTransmission(const std::vector<NodesIps>& all_nodes_ips,
 
 void networkInfo(Ptr<FlowMonitor> monitor);
 void roundCleanup();
-
-#endif // SIM_UTILS_H
