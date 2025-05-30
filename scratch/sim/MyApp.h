@@ -9,6 +9,24 @@
 
 using namespace ns3;
 
+class FinHeader : public Header {
+public:
+    FinHeader() : m_isFin(false) {}
+    
+    static TypeId GetTypeId();
+    TypeId GetInstanceTypeId() const override;
+    uint32_t GetSerializedSize() const override;
+    void Serialize(Buffer::Iterator start) const override;
+    uint32_t Deserialize(Buffer::Iterator start) override;
+    void Print(std::ostream &os) const override;
+    
+    void SetIsFin(bool isFin) { m_isFin = isFin; }
+    bool IsFin() const { return m_isFin; }
+
+private:
+    bool m_isFin;
+};
+
 class MyApp : public Application {
 public:
     MyApp();

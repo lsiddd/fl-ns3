@@ -205,16 +205,24 @@ void sinkRxCallback(Ptr<const Packet> packet, const Address &from)
     Ipv4Address senderIp = address.GetIpv4();
     // NS_LOG_DEBUG("sinkRxCallback: Sender IP: " << senderIp);
 
+    // bool fin_packet = false;
+    // // NS_LOG_DEBUG("sinkRxCallback: Scanning packet payload for 'b' character (FIN signal)...");
+    // for (uint32_t i = 0; i < bytes_to_check; ++i) // Only scan copied part
+    // {
+    //     if (buffer[i] == 'b')
+    //     {
+    //         fin_packet = true;
+    //         NS_LOG_INFO("sinkRxCallback: 'b' character (FIN signal) found in packet from " << senderIp);
+    //         break;
+    //     }
+    // }
+
+    // Check for FIN header
     bool fin_packet = false;
-    // NS_LOG_DEBUG("sinkRxCallback: Scanning packet payload for 'b' character (FIN signal)...");
-    for (uint32_t i = 0; i < bytes_to_check; ++i) // Only scan copied part
-    {
-        if (buffer[i] == 'b')
-        {
-            fin_packet = true;
-            NS_LOG_INFO("sinkRxCallback: 'b' character (FIN signal) found in packet from " << senderIp);
-            break;
-        }
+    FinHeader finHeader;
+    if (packet->PeekHeader(finHeader) && finHeader.IsFin()) {
+        fin_packet = true;
+        NS_LOG_DEBUG("sinkRxCallback: FIN header found in packet");
     }
 
     if (fin_packet)

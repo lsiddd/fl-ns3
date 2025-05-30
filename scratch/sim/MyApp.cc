@@ -2,9 +2,41 @@
 #include "ns3/simulator.h"
 #include "ns3/log.h"
 #include "ns3/packet.h"
+#include "ns3/header.h"
 #include <iostream> // For std::endl
 
 NS_LOG_COMPONENT_DEFINE("MyApp");
+
+
+NS_OBJECT_ENSURE_REGISTERED(FinHeader);
+
+TypeId FinHeader::GetTypeId() {
+    static TypeId tid = TypeId("ns3::FinHeader")
+        .SetParent<Header>()
+        .AddConstructor<FinHeader>();
+    return tid;
+}
+
+TypeId FinHeader::GetInstanceTypeId() const {
+    return GetTypeId();
+}
+
+uint32_t FinHeader::GetSerializedSize() const {
+    return sizeof(uint8_t); // 1 byte for boolean flag
+}
+
+void FinHeader::Serialize(Buffer::Iterator start) const {
+    start.WriteU8(m_isFin ? 1 : 0);
+}
+
+uint32_t FinHeader::Deserialize(Buffer::Iterator start) {
+    m_isFin = (start.ReadU8() == 1);
+    return GetSerializedSize();
+}
+
+void FinHeader::Print(std::ostream &os) const {
+    os << "FIN=" << (m_isFin ? "true" : "false");
+}
 
 MyApp::MyApp() = default;
 
@@ -85,13 +117,18 @@ void MyApp::SendPacket() {
     }
 
     Ptr<Packet> packet;
-    // Check for the last packet (m_packetsSent is 0-indexed)
-    if (m_packetsSent == m_nPackets - 1) { // Correct index check for the last packet
+    if (m_packetsSent == m_nPackets - 1) {
         packet = Create<Packet>(m_data_fin, m_writeSize);
-        NS_LOG_INFO("MyApp SendPacket: Sending final packet (num " << m_packetsSent + 1 << "/" << m_nPackets << ") of size " << m_writeSize << " (FIN signal).");
+        
+        // Add FIN header
+        FinHeader finHeader;
+        finHeader.SetIsFin(true);
+        packet->AddHeader(finHeader);
+        
+        NS_LOG_INFO("MyApp SendPacket: Sending final packet (FIN) with header");
     } else {
         packet = Create<Packet>(m_data, m_writeSize);
-        NS_LOG_DEBUG("MyApp SendPacket: Sending data packet (num " << m_packetsSent + 1 << "/" << m_nPackets << ") of size " << m_writeSize << ".");
+        NS_LOG_DEBUG("MyApp SendPacket: Sending data packet");
     }
 
     // --- CORRECTED ERROR HANDLING ---

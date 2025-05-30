@@ -49,6 +49,9 @@
 #include <tuple>
 #include <unistd.h> // For sleep
 #include <vector>
+#include <cstdio> // For popen, pclose
+#include <stdexcept> // For runtime_error
+#include <cstring> // For strerror
 
 // Using declarations for convenience
 using namespace ns3;
@@ -68,7 +71,8 @@ std::string algorithm = "fedavg"; // This will map to FL API's aggregation if
                                   // needed, but /run_round uses its own.
 
 // Python FL API settings
-const std::string FL_API_BASE_URL = "http://127.0.0.1:5000";
+// Update this to a dynamic variable/string
+std::string FL_API_BASE_URL = "http://127.0.0.1:5000"; // Will be updated after Python script starts
 const int FL_API_NUM_CLIENTS = numberOfUes; // Tell FL API about the total UEs
 const int FL_API_CLIENTS_PER_ROUND =
     numberOfParticipatingClients; // How many ns-3 selects to tell FL API
@@ -119,6 +123,41 @@ Time timeout = Seconds(50); // ns-3 round timeout for model transfers
 static double constexpr managerInterval =
     1.0; // ns-3 manager check interval, increased for clearer logging
 
+// Function to execute external command and capture output
+std::string exec(const char* cmd) {
+    std::array<char, 128> buffer;
+    std::string result;
+    NS_LOG_DEBUG("exec: Running command: " << cmd);
+    // Use popen to run the command and capture its output
+    FILE* pipe = popen(cmd, "r");
+    if (!pipe) {
+         NS_LOG_ERROR("exec: popen() failed: " << strerror(errno));
+         throw std::runtime_error("popen() failed!");
+    }
+    try {
+        while (fgets(buffer.data(), buffer.size(), pipe) != nullptr) {
+            result += buffer.data();
+        }
+    } catch (...) {
+        pclose(pipe);
+        NS_LOG_ERROR("exec: Exception occurred while reading from pipe.");
+        throw;
+    }
+    int exit_code = pclose(pipe);
+     if (exit_code == -1) {
+        NS_LOG_ERROR("exec: pclose() failed: " << strerror(errno));
+        // Continue, as popen might have worked partially
+    } else if (WIFEXITED(exit_code) && WEXITSTATUS(exit_code) != 0) {
+        NS_LOG_ERROR("exec: Command exited with non-zero status " << WEXITSTATUS(exit_code) << " for command: " << cmd);
+        // Depending on requirements, you might want to throw here
+    } else if (WIFSIGNALED(exit_code)) {
+         NS_LOG_ERROR("exec: Command killed by signal " << WTERMSIG(exit_code) << " for command: " << cmd);
+          // Depending on requirements, you might want to throw here
+    }
+    NS_LOG_DEBUG("exec: Command finished. Output: " << result);
+    return result;
+}
+
 // --- Helper function to call Python API ---
 // Returns the HTTP status code and optionally saves response to a file
 int callPythonApi(const std::string &endpoint,
@@ -141,6 +180,7 @@ int callPythonApi(const std::string &endpoint,
   if (method == "POST" && !data.empty()) {
     command << " -H \"Content-Type: application/json\" -d '" << data << "'";
   }
+  // Use the dynamic FL_API_BASE_URL
   command << " " << FL_API_BASE_URL << endpoint;
 
   NS_LOG_INFO("callPythonApi: PREPARING to execute CURL for endpoint "
@@ -159,7 +199,7 @@ int callPythonApi(const std::string &endpoint,
   if (!pipe) {
     NS_LOG_ERROR("callPythonApi: popen() FAILED for command: "
                  << command.str() << " at " << Simulator::Now().GetSeconds()
-                 << "s.");
+                 << "s. Error: " << strerror(errno));
     std::fflush(stdout);
     return -1;
   }
@@ -197,21 +237,23 @@ int callPythonApi(const std::string &endpoint,
   NS_LOG_INFO("callPythonApi: pclose status for "
               << endpoint << ": " << status << " at "
               << Simulator::Now().GetSeconds()
-              << "s. Curl result: " << result_str); // Log result_str here
+              << "s. Curl result: '" << result_str << "'"); // Log result_str here
   std::fflush(stdout);
 
   if (status == -1) {
     NS_LOG_ERROR("callPythonApi: pclose failed or command not found. Status: "
-                 << status);
+                 << status << ". Error: " << strerror(errno));
     return -1;
   } else if (WIFEXITED(status) && WEXITSTATUS(status) != 0) {
     NS_LOG_ERROR("callPythonApi: Curl command exited with status "
-                 << WEXITSTATUS(status) << ". HTTP code: " << result_str);
+                 << WEXITSTATUS(status) << ". HTTP code: '" << result_str << "'");
     // result_str might contain the http code even if curl itself had an error
     // code (e.g. connection refused)
   }
 
   try {
+    // Attempt to parse the HTTP code from the result string
+    // The result string should contain only the HTTP code because of -s -w "%{http_code}"
     return std::stoi(result_str);
   } catch (const std::invalid_argument &ia) {
     NS_LOG_ERROR("callPythonApi: Invalid argument for stoi: '" << result_str
@@ -223,6 +265,7 @@ int callPythonApi(const std::string &endpoint,
     return -1; // Or some other error code
   }
 }
+
 
 void initializeDataFrames() {
   std::vector<std::string> accuracy_columns = {"time",
@@ -668,7 +711,7 @@ void manager() {
   if (!fl_api_initialized) {
     NS_LOG_INFO("Manager: FL API not yet initialized by main. Manager waiting "
                 "for 5 seconds.");
-    Simulator::Schedule(Seconds(5.0), &manager);
+    Simulator::Schedule(Seconds(managerInterval), &manager); // Use managerInterval for consistency
     return;
   }
 
@@ -717,6 +760,13 @@ void manager() {
   if (roundFinished) {
     NS_LOG_INFO("Manager: ns-3 communication phase for round "
                 << roundNumber << " is finished or was skipped.");
+
+    // Check if max rounds reached (if you add such a constant)
+    // if (roundNumber >= MAX_FL_ROUNDS) {
+    //    NS_LOG_INFO("Manager: Maximum FL rounds (" << MAX_FL_ROUNDS << ") reached. Stopping simulation.");
+    //    Simulator::Stop(); // Stop the simulation
+    //    return; // Don't schedule next manager call
+    // }
 
     startNewFLRound(roundStartTimeNs3Comms); // This will attempt to set
                                              // roundFinished=false
@@ -775,7 +825,7 @@ int main(int argc, char *argv[]) {
   LogComponentEnable("ClientTypes", LOG_LEVEL_INFO);
   LogComponentEnable("DataFrame", LOG_LEVEL_DEBUG); // DataFrame can be chatty
   LogComponentEnable("Notifications",LOG_LEVEL_INFO); // Keep connection logs visible
-  LogComponentEnable("TcpSocket", LOG_LEVEL_DEBUG); // Increased logging for Sockets 
+  LogComponentEnable("TcpSocket", LOG_LEVEL_DEBUG); // Increased logging for Sockets
   LogComponentEnable("TcpSocketBase", LOG_LEVEL_DEBUG); // Even more
   // socket detail LogComponentEnable("Ipv4L3Protocol", LOG_LEVEL_DEBUG); //
   // Logging for network layer issues Uncomment for very detailed debug logs:
@@ -797,15 +847,70 @@ int main(int argc, char *argv[]) {
 
   // --- Start Python FL API Server ---
   NS_LOG_INFO("Attempting to start Python FL API server...");
-  int ret = system("python3 scratch/fl_api.py > fl_api.log 2>&1 &");
-  if (ret != 0) {
-    NS_LOG_ERROR(
-        "ERROR: Failed to start Python FL API server. Exit code: " << ret);
-    // return 1; // Can't proceed if API server fails to start
+  // Use popen to capture output and find the port
+  std::string python_cmd = "python3 scratch/fl_api.py"; // Ensure correct path
+  FILE* python_pipe = popen((python_cmd + " 2>&1 &").c_str(), "r"); // Run in background, capture stdout/stderr
+  if (!python_pipe) {
+      NS_FATAL_ERROR("Failed to start Python FL API server using popen: " << strerror(errno));
   }
-  NS_LOG_INFO("Python FL API server started (hopefully). Waiting for it to "
-              "initialize (10s delay)...");
-  sleep(10); // Give server time to start up. Robust: poll an endpoint.
+  NS_LOG_INFO("Python FL API server started (hopefully). Reading output to find port...");
+
+  char line_buffer[256];
+  int api_port = -1;
+  bool port_found = false;
+  std::string python_output;
+
+  // Give the script a moment to start and print the port
+  sleep(5); // Initial wait
+
+  // Try reading output for a few seconds to find the port
+  for(int i = 0; i < 10 && !port_found; ++i) { // Try reading for up to 10 seconds
+      NS_LOG_DEBUG("Attempting to read Python script output (attempt " << i+1 << "/10)...");
+      while (fgets(line_buffer, sizeof(line_buffer), python_pipe) != nullptr) {
+          std::string line = line_buffer;
+          python_output += line; // Accumulate all output for debugging
+          NS_LOG_DEBUG("Python output line: " << line);
+          if (line.rfind("FL_API_PORT:", 0) == 0) { // Check if line starts with "FL_API_PORT:"
+              try {
+                  api_port = std::stoi(line.substr(12)); // Extract port number after "FL_API_PORT:"
+                  port_found = true;
+                  NS_LOG_INFO("Found FL API port: " << api_port << " from Python script output.");
+                  break; // Found the port, exit inner loop
+              } catch (const std::invalid_argument& ia) {
+                   NS_LOG_ERROR("Failed to parse port number from Python output line: '" << line << "'");
+              } catch (const std::out_of_range& oor) {
+                   NS_LOG_ERROR("Parsed port number is out of range from Python output line: '" << line << "'");
+              }
+          }
+      }
+      if (!port_found) {
+          // If port not found yet, wait a bit longer before trying to read again
+          sleep(1);
+      }
+  }
+
+  // Close the pipe
+  int pclose_status = pclose(python_pipe);
+  if (pclose_status == -1) {
+       NS_LOG_ERROR("pclose() failed for Python pipe: " << strerror(errno));
+  } else {
+      // Check if the child process exited normally (optional, but good practice)
+       if (WIFEXITED(pclose_status)) {
+            NS_LOG_DEBUG("Python script popen process exited with status " << WEXITSTATUS(pclose_status));
+        } else if (WIFSIGNALED(pclose_status)) {
+            NS_LOG_WARN("Python script popen process terminated by signal " << WTERMSIG(pclose_status));
+        }
+  }
+
+
+  if (!port_found || api_port == -1) {
+      NS_FATAL_ERROR("Failed to determine Python FL API port. Check fl_api.py output:\n" << python_output);
+  }
+
+  // Update the global FL_API_BASE_URL
+  FL_API_BASE_URL = "http://127.0.0.1:" + std::to_string(api_port);
+  NS_LOG_INFO("FL_API_BASE_URL set to: " << FL_API_BASE_URL);
+
 
   // --- Configure and Initialize Python FL API ---
   NS_LOG_INFO("Configuring Python FL API...");
@@ -817,6 +922,7 @@ int main(int argc, char *argv[]) {
   fl_config_payload["local_epochs"] = 1;
   fl_config_payload["batch_size"] = 32;
   // Add other relevant FL_STATE['config'] parameters from Python API
+  fl_config_payload["port"] = api_port; // Optionally send the actual port used back
 
   int http_code =
       callPythonApi("/configure", "POST",
@@ -824,11 +930,11 @@ int main(int argc, char *argv[]) {
   if (http_code != 200) {
     NS_LOG_ERROR(
         "ERROR: Failed to configure Python FL API. HTTP Code: " << http_code);
-    // return 1;
+    // return 1; // Decide if this is fatal
   } else {
     NS_LOG_INFO("Python FL API configured successfully.");
   }
-  sleep(1);
+  sleep(1); // Give API a moment
 
   NS_LOG_INFO(
       "Initializing Python FL API simulation (data loading, initial model)...");
@@ -838,7 +944,7 @@ int main(int argc, char *argv[]) {
     NS_LOG_ERROR(
         "ERROR: Failed to initialize Python FL API simulation. HTTP Code: "
         << http_code);
-    // return 1;
+    // return 1; // Decide if this is fatal
   } else {
     NS_LOG_INFO("Python FL API simulation initialized successfully.");
     fl_api_initialized = true; // Signal to manager that API is ready
@@ -1031,6 +1137,9 @@ int main(int argc, char *argv[]) {
   NS_LOG_INFO("Stopping Python FL API server...");
 
   // Safer process termination using PID file tracking
+  // We can't easily get the PID from popen running in the background (&).
+  // A robust solution would involve the python script writing its PID to a file.
+  // For now, we'll stick to pkill, which is less precise but often sufficient.
   int kill_status = system("pkill -f 'python3 scratch/sim/fl_api.py'");
 
   // Handle command execution status
