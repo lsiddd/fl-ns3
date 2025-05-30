@@ -9,17 +9,18 @@
 
 using namespace ns3;
 
-class FinHeader : public Header {
+class FinHeader : public Header
+{
 public:
     FinHeader() : m_isFin(false) {}
-    
+
     static TypeId GetTypeId();
     TypeId GetInstanceTypeId() const override;
     uint32_t GetSerializedSize() const override;
     void Serialize(Buffer::Iterator start) const override;
     uint32_t Deserialize(Buffer::Iterator start) override;
     void Print(std::ostream &os) const override;
-    
+
     void SetIsFin(bool isFin) { m_isFin = isFin; }
     bool IsFin() const { return m_isFin; }
 
@@ -27,7 +28,8 @@ private:
     bool m_isFin;
 };
 
-class MyApp : public Application {
+class MyApp : public Application
+{
 public:
     MyApp();
     virtual ~MyApp() override;
@@ -35,7 +37,8 @@ public:
     // Setup method now explicitly notes that packetSize is for scheduling logic (even if writeSize is used now)
     // and writeSize is the actual payload size.
     void Setup(Ptr<Socket> socket, Address address, uint32_t packetSize,
-               uint32_t nPackets, DataRate dataRate, uint32_t writeSize, uint8_t* data, uint8_t* dataFin);
+                      uint32_t nPackets, DataRate dataRate, uint32_t writeSize,
+                      const std::vector<uint8_t> &data, const std::vector<uint8_t> &dataFin);
     virtual void StopApplication() override;
 
 private:
@@ -51,9 +54,8 @@ private:
     EventId m_sendEvent;
     bool m_running{false};
     uint64_t m_packetsSent{0};
-    Time m_startTime; // Stores the app start time
-    uint8_t* m_data; // Pointer to the normal data buffer (owned by caller)
-    uint8_t* m_data_fin; // Pointer to the final packet data buffer (owned by caller)
-    uint64_t m_writeSize; // Actual size of payload for each packet
-
+    Time m_startTime;                // Stores the app start time
+    std::vector<uint8_t> m_data;     // Owned data buffer
+    std::vector<uint8_t> m_data_fin; // Owned FIN data buffer
+    uint64_t m_writeSize;            // Actual payload size
 };
