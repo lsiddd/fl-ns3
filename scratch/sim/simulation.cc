@@ -64,7 +64,7 @@ NS_LOG_COMPONENT_DEFINE("Simulation");
 static constexpr double simStopTime = 400.0;
 static constexpr int numberOfUes = 10; // Reduced for faster testing
 static constexpr int numberOfEnbs = 5; // Reduced for faster testing
-static constexpr int numberOfParticipatingClients = 15;
+static constexpr int numberOfParticipatingClients = 5;
 static constexpr int scenarioSize = 1000;
 bool useStaticClients = true;
 std::string algorithm = "fedavg"; // This will map to FL API's aggregation if
@@ -72,7 +72,20 @@ std::string algorithm = "fedavg"; // This will map to FL API's aggregation if
 
 // Python FL API settings
 // Update this to a dynamic variable/string
-std::string FL_API_BASE_URL = "http://127.0.0.1:5000"; // Will be updated after Python script starts
+
+// Helper function to get an environment variable or a default value
+std::string getEnvVar(const std::string &key, const std::string &default_val) {
+    const char* val = std::getenv(key.c_str());
+    if (val == nullptr) {
+        NS_LOG_INFO("Environment variable '" << key << "' not found. Using default value: '" << default_val << "'.");
+        return default_val;
+    }
+    NS_LOG_INFO("Found environment variable '" << key << "'. Value: '" << val << "'.");
+    return std::string(val);
+}
+
+// Read the API URL from the environment variable set by Docker Compose
+std::string FL_API_BASE_URL = getEnvVar("FL_API_URL", "http://127.0.0.1:5000");
 const int FL_API_NUM_CLIENTS = numberOfUes; // Tell FL API about the total UEs
 const int FL_API_CLIENTS_PER_ROUND =
     numberOfParticipatingClients; // How many ns-3 selects to tell FL API
@@ -690,15 +703,26 @@ void startNewFLRound(
                           // round attempt (or stop if max rounds)
   }
 }
-
+// NEW CODE
 void exportDataFrames() {
-  NS_LOG_INFO("Exporting DataFrames to CSV files.");
-  accuracy_df.toCsv("accuracy_fl_api.csv");
-  participation_df.toCsv("clientParticipation_fl_api.csv");
-  throughput_df.toCsv("throughput_fl_api.csv");
-  rsrp_sinr_df.toCsv("rsrp_sinr_metrics.csv"); // Export new RSRP/SINR DataFrame
-  NS_LOG_INFO("All DataFrames exported.");
+    NS_LOG_INFO("Exporting DataFrames to 'results/' directory.");
+    // Create the directory if it doesn't exist
+    system("mkdir -p results");
+    accuracy_df.toCsv("results/accuracy_fl_api.csv");
+    participation_df.toCsv("results/clientParticipation_fl_api.csv");
+    throughput_df.toCsv("results/throughput_fl_api.csv");
+    rsrp_sinr_df.toCsv("results/rsrp_sinr_metrics.csv");
+    NS_LOG_INFO("All DataFrames exported.");
 }
+
+// void exportDataFrames() {
+//   NS_LOG_INFO("Exporting DataFrames to CSV files.");
+//   accuracy_df.toCsv("accuracy_fl_api.csv");
+//   participation_df.toCsv("clientParticipation_fl_api.csv");
+//   throughput_df.toCsv("throughput_fl_api.csv");
+//   rsrp_sinr_df.toCsv("rsrp_sinr_metrics.csv"); // Export new RSRP/SINR DataFrame
+//   NS_LOG_INFO("All DataFrames exported.");
+// }
 
 void manager() {
   static Time roundStartTimeNs3Comms =
@@ -845,75 +869,75 @@ int main(int argc, char *argv[]) {
                "FL algorithm (ns-3 perspective, less relevant now)", algorithm);
   cmd.Parse(argc, argv);
 
-  // --- Start Python FL API Server ---
-  NS_LOG_INFO("Attempting to start Python FL API server...");
-  // Use popen to capture output and find the port
-  std::string python_cmd = "python3 scratch/fl_api.py"; // Ensure correct path
-  FILE* python_pipe = popen((python_cmd + " 2>&1 &").c_str(), "r"); // Run in background, capture stdout/stderr
-  if (!python_pipe) {
-      NS_FATAL_ERROR("Failed to start Python FL API server using popen: " << strerror(errno));
-  }
-  NS_LOG_INFO("Python FL API server started (hopefully). Reading output to find port...");
+  // // --- Start Python FL API Server ---
+  // NS_LOG_INFO("Attempting to start Python FL API server...");
+  // // Use popen to capture output and find the port
+  // std::string python_cmd = "python3 scratch/fl_api.py"; // Ensure correct path
+  // FILE* python_pipe = popen((python_cmd + " 2>&1 &").c_str(), "r"); // Run in background, capture stdout/stderr
+  // if (!python_pipe) {
+  //     NS_FATAL_ERROR("Failed to start Python FL API server using popen: " << strerror(errno));
+  // }
+  // NS_LOG_INFO("Python FL API server started (hopefully). Reading output to find port...");
 
-  char line_buffer[256];
-  int api_port = -1;
-  bool port_found = false;
-  std::string python_output;
+  // char line_buffer[256];
+  // bool port_found = false;
+  // std::string python_output;
 
-  // Give the script a moment to start and print the port
-  sleep(5); // Initial wait
+  // // Give the script a moment to start and print the port
+  // sleep(5); // Initial wait
 
-  // Try reading output for a few seconds to find the port
-  for(int i = 0; i < 10 && !port_found; ++i) { // Try reading for up to 10 seconds
-      NS_LOG_DEBUG("Attempting to read Python script output (attempt " << i+1 << "/10)...");
-      while (fgets(line_buffer, sizeof(line_buffer), python_pipe) != nullptr) {
-          std::string line = line_buffer;
-          python_output += line; // Accumulate all output for debugging
-          NS_LOG_DEBUG("Python output line: " << line);
-          if (line.rfind("FL_API_PORT:", 0) == 0) { // Check if line starts with "FL_API_PORT:"
-              try {
-                  api_port = std::stoi(line.substr(12)); // Extract port number after "FL_API_PORT:"
-                  port_found = true;
-                  NS_LOG_INFO("Found FL API port: " << api_port << " from Python script output.");
-                  break; // Found the port, exit inner loop
-              } catch (const std::invalid_argument& ia) {
-                   NS_LOG_ERROR("Failed to parse port number from Python output line: '" << line << "'");
-              } catch (const std::out_of_range& oor) {
-                   NS_LOG_ERROR("Parsed port number is out of range from Python output line: '" << line << "'");
-              }
-          }
-      }
-      if (!port_found) {
-          // If port not found yet, wait a bit longer before trying to read again
-          sleep(1);
-      }
-  }
+  // // Try reading output for a few seconds to find the port
+  // for(int i = 0; i < 10 && !port_found; ++i) { // Try reading for up to 10 seconds
+  //     NS_LOG_DEBUG("Attempting to read Python script output (attempt " << i+1 << "/10)...");
+  //     while (fgets(line_buffer, sizeof(line_buffer), python_pipe) != nullptr) {
+  //         std::string line = line_buffer;
+  //         python_output += line; // Accumulate all output for debugging
+  //         NS_LOG_DEBUG("Python output line: " << line);
+  //         if (line.rfind("FL_API_PORT:", 0) == 0) { // Check if line starts with "FL_API_PORT:"
+  //             try {
+  //                 api_port = std::stoi(line.substr(12)); // Extract port number after "FL_API_PORT:"
+  //                 port_found = true;
+  //                 NS_LOG_INFO("Found FL API port: " << api_port << " from Python script output.");
+  //                 break; // Found the port, exit inner loop
+  //             } catch (const std::invalid_argument& ia) {
+  //                  NS_LOG_ERROR("Failed to parse port number from Python output line: '" << line << "'");
+  //             } catch (const std::out_of_range& oor) {
+  //                  NS_LOG_ERROR("Parsed port number is out of range from Python output line: '" << line << "'");
+  //             }
+  //         }
+  //     }
+  //     if (!port_found) {
+  //         // If port not found yet, wait a bit longer before trying to read again
+  //         sleep(1);
+  //     }
+  // }
 
-  // Close the pipe
-  int pclose_status = pclose(python_pipe);
-  if (pclose_status == -1) {
-       NS_LOG_ERROR("pclose() failed for Python pipe: " << strerror(errno));
-  } else {
-      // Check if the child process exited normally (optional, but good practice)
-       if (WIFEXITED(pclose_status)) {
-            NS_LOG_DEBUG("Python script popen process exited with status " << WEXITSTATUS(pclose_status));
-        } else if (WIFSIGNALED(pclose_status)) {
-            NS_LOG_WARN("Python script popen process terminated by signal " << WTERMSIG(pclose_status));
-        }
-  }
+  // // Close the pipe
+  // int pclose_status = pclose(python_pipe);
+  // if (pclose_status == -1) {
+  //      NS_LOG_ERROR("pclose() failed for Python pipe: " << strerror(errno));
+  // } else {
+  //     // Check if the child process exited normally (optional, but good practice)
+  //      if (WIFEXITED(pclose_status)) {
+  //           NS_LOG_DEBUG("Python script popen process exited with status " << WEXITSTATUS(pclose_status));
+  //       } else if (WIFSIGNALED(pclose_status)) {
+  //           NS_LOG_WARN("Python script popen process terminated by signal " << WTERMSIG(pclose_status));
+  //       }
+  // }
 
 
-  if (!port_found || api_port == -1) {
-      NS_FATAL_ERROR("Failed to determine Python FL API port. Check fl_api.py output:\n" << python_output);
-  }
+  // if (!port_found || api_port == -1) {
+  //     NS_FATAL_ERROR("Failed to determine Python FL API port. Check fl_api.py output:\n" << python_output);
+  // }
 
-  // Update the global FL_API_BASE_URL
-  FL_API_BASE_URL = "http://127.0.0.1:" + std::to_string(api_port);
-  NS_LOG_INFO("FL_API_BASE_URL set to: " << FL_API_BASE_URL);
+  // // Update the global FL_API_BASE_URL
+  // FL_API_BASE_URL = "http://127.0.0.1:" + std::to_string(api_port);
+  // NS_LOG_INFO("FL_API_BASE_URL set to: " << FL_API_BASE_URL);
 
 
   // --- Configure and Initialize Python FL API ---
   NS_LOG_INFO("Configuring Python FL API...");
+  int api_port = 5000;
   json fl_config_payload;
   fl_config_payload["dataset"] = "mnist";
   fl_config_payload["num_clients"] = FL_API_NUM_CLIENTS; // Total UEs in ns-3

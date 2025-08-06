@@ -1,0 +1,55 @@
+version: '3.8'
+
+networks:
+  fl-net:
+    driver: bridge
+
+services:
+  fl-api:
+    build: .
+    container_name: fl-api-server
+    command: python3 scratch/fl_api.py --port 5000
+    networks:
+      - fl-net
+    ports:
+      - "8080:5000"
+    volumes:
+      # Mount the entire project directory to run the Python script from the host
+      - .:/app
+
+  ns3-simulation:
+    build: .
+    container_name: ns3-simulation-runner
+    depends_on:
+      - fl-api
+    networks:
+      - fl-net
+    environment:
+      - FL_API_URL=http://fl-api:5000
+    command: >
+      bash -c "
+        set -e;
+        
+        # Step 1: Configure and build ns-3. 
+        # This will use the host's files via the volume mount. 
+        # If it's already built, it will be very fast.
+        echo 'Configuring and building ns-3 simulation...';
+        ./ns3 configure;
+        ./ns3 build;
+
+        # Step 2: Wait for the FL API server to be ready.
+        while ! curl -s http://fl-api:5000/ping > /dev/null; do
+          echo 'Waiting for FL API server...';
+          sleep 2;
+        done;
+        echo 'FL API server is responsive. Starting ns-3 simulation.';
+        
+        # Step 3: Run the simulation using the newly compiled executable.
+        ./ns3 run 'simulation';
+      "
+    volumes:
+      # Mount the entire project directory.
+      # This makes all source files, build, and cmake-cache available from the host.
+      - .:/app
+      # Explicitly mount the results directory to get output back on the host.
+      - ./results:/app/results

@@ -1,0 +1,14 @@
+# Ignore build directories and cache
+#build
+#cmake-cache
+
+# Ignore Git history
+.git
+
+# Ignore local output
+results
+
+# Ignore Docker files
+Dockerfile
+docker-compose.yml
+.dockerignore
