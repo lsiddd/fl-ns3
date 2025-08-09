@@ -62,7 +62,7 @@ using json = nlohmann::json;
 NS_LOG_COMPONENT_DEFINE("Simulation");
 
 // Global constants
-static constexpr double simStopTime = 400.0;
+static constexpr double simStopTime = 20.0;
 static constexpr int numberOfUes = 10;
 static constexpr int numberOfEnbs = 5;
 static constexpr int numberOfParticipatingClients = 5;
@@ -82,7 +82,7 @@ std::string getEnvVar(const std::string &key, const std::string &default_val) {
 }
 
 // Read the API URL from the environment variable set by Docker Compose
-std::string FL_API_BASE_URL = getEnvVar("FL_API_URL", "http://127.0.0.1:5005");
+std::string FL_API_BASE_URL = getEnvVar("FL_API_URL", "http://127.0.0.1:5000");
 const int FL_API_NUM_CLIENTS = numberOfUes;
 const int FL_API_CLIENTS_PER_ROUND =
     numberOfParticipatingClients;
@@ -326,7 +326,7 @@ void updateAllClientsGlobalInfo() {
   NS_LOG_INFO("Atualizando informacoes globais de clientes para todos os UEs.");
   clientsInfoGlobal.clear();
   const int defaultTrainingTime =
-      5005;
+      5000;
   const int defaultModelSizeBytes =
       2000000;
 
@@ -724,7 +724,7 @@ int main(int argc, char *argv[]) {
 
   // --- MODIFICADO: Chamadas de configuração agora usam a função `callPythonApi` reimplementada ---
   NS_LOG_INFO("Configurando a API Python de FL...");
-  int api_port = 5005;
+  int api_port = 5000;
   json fl_config_payload;
   fl_config_payload["dataset"] = "mnist";
   fl_config_payload["num_clients"] = FL_API_NUM_CLIENTS;
@@ -919,24 +919,7 @@ int main(int argc, char *argv[]) {
   Simulator::Run();
   NS_LOG_INFO("Simulacao ns-3 Finalizada.");
 
-  NS_LOG_INFO("Parando o servidor da API Python de FL...");
-  int kill_status = system("pkill -f 'python3 scratch/api.py'");
-  if (kill_status == -1) {
-    NS_LOG_ERROR("Falha ao executar o comando pkill: " << std::strerror(errno));
-  } else {
-    if (WIFEXITED(kill_status)) {
-      const int exit_code = WEXITSTATUS(kill_status);
-      if (exit_code == 0) {
-        NS_LOG_INFO("Servidor da API Python de FL terminado com sucesso");
-      } else if (exit_code == 1) {
-        NS_LOG_WARN("Servidor Python nao encontrado (ja terminado?)");
-      } else {
-        NS_LOG_WARN("pkill saiu de forma anormal (codigo: " << exit_code << ")");
-      }
-    } else {
-      NS_LOG_WARN("pkill terminado por sinal: " << WTERMSIG(kill_status));
-    }
-  }
+  NS_LOG_INFO("Simulacao ns-3 finalizada. O servidor da API Python sera encerrado graciosamente pelo Docker.");
 
   exportDataFrames();
   Simulator::Destroy();

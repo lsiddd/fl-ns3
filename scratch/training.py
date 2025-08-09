@@ -7,8 +7,10 @@ import time
 import numpy as np
 import tensorflow as tf
 import logging
+import sqlite3
+import json
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Any
 
 from config import FLConfig, DatasetType, OptimizerType, AggregationMethod
 from data import DataLoader
@@ -90,16 +92,13 @@ class FLSimulationState:
     global_model: Optional[tf.keras.Model] = None
     current_global_weights: Optional[List[np.ndarray]] = None
     eligible_client_indices: Optional[List[int]] = None
-    history_log: Dict[str, List] = field(default_factory=lambda: collections.defaultdict(list))
+    # CORREÇÃO: Adicionado o atributo client_metadata que estava faltando.
+    client_metadata: Dict[int, Any] = field(default_factory=dict)
     current_round: int = 0
     simulation_initialized: bool = False
     model_compiled: bool = False
     data_loaded: bool = False
     is_training_round_active: bool = False
-    
-    # Additional realistic FL state
-    client_metadata: Dict[int, Dict] = field(default_factory=dict)
-    round_metrics: List[Dict] = field(default_factory=list)
     aggregation_strategy: Optional[AggregationStrategy] = None
 
 
@@ -111,6 +110,9 @@ class FLCoordinator:
         self.logger = logger
         self.data_loader = None
         self.client_trainer = None
+        self.db_connection = None
+        self.db_path = 'fl_state.db'
+        self._init_database()
         
     def initialize(self, config: FLConfig):
         """Initialize the FL simulation"""
@@ -173,8 +175,25 @@ class FLCoordinator:
         self.state.data_loaded = True
         self.state.current_round = 0
         
-        # Evaluate initial model
-        self._evaluate_and_log(round_num=0)
+        # Clear existing database state and initialize
+        self._reset_database()
+        
+        # Store initial configuration
+        self._store_config(config)
+        
+        # Store initial client metadata
+        for i in range(config.num_clients):
+            self._store_client_metadata(i, {
+                'num_samples': client_samples[i],
+                'is_eligible': i in self.state.eligible_client_indices,
+                'rounds_participated': 0,
+                'total_loss': 0.0,
+                'total_accuracy': 0.0
+            })
+        
+        # Evaluate initial model and store in database
+        initial_metrics = self._evaluate_and_log(round_num=0)
+        self._store_history_entry(0, initial_metrics)
         
     def run_round(self, selected_clients: Optional[List[int]] = None) -> Dict:
         """Execute one round of federated learning"""
@@ -241,11 +260,9 @@ class FLCoordinator:
             test_metrics = self._evaluate_and_log(round_num)
             round_metrics.update(test_metrics)
         
-        # Update history
-        self._update_history(round_num, round_metrics)
-        
-        # Store round metadata
-        self.state.round_metrics.append({
+        # Store history and round metrics in database
+        self._store_history_entry(round_num, round_metrics)
+        self._store_round_metadata({
             'round': round_num,
             'clients': participating_clients,
             'metrics': round_metrics,
@@ -305,10 +322,12 @@ class FLCoordinator:
                 'training_time_ms': training_time
             }
             
-            # Update client metadata
-            self.state.client_metadata[client_id]['rounds_participated'] += 1
-            self.state.client_metadata[client_id]['total_loss'] += loss
-            self.state.client_metadata[client_id]['total_accuracy'] += accuracy
+            # Update client metadata in database
+            self._update_client_metadata(client_id, {
+                'rounds_participated': 1,  # increment by 1
+                'total_loss': loss,  # add to existing
+                'total_accuracy': accuracy  # add to existing
+            })
         
         return {
             'client_weights': client_weights,
@@ -371,15 +390,249 @@ class FLCoordinator:
             'global_test_accuracy': float('nan')
         }
     
-    def _update_history(self, round_num: int, metrics: Dict):
-        """Update training history"""
-        
-        self.state.history_log['round'].append(round_num)
-        
-        for key in ['avg_client_loss', 'avg_client_accuracy', 
-                   'global_test_loss', 'global_test_accuracy']:
-            value = metrics.get(key, float('nan'))
-            self.state.history_log[key].append(value)
+    def _init_database(self):
+        """Initialize SQLite database connection and tables"""
+        try:
+            self.db_connection = sqlite3.connect(self.db_path, check_same_thread=False)
+            self.db_connection.execute('PRAGMA foreign_keys = ON')
+            
+            # Create tables
+            self.db_connection.executescript('''
+                CREATE TABLE IF NOT EXISTS config (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                );
+                
+                CREATE TABLE IF NOT EXISTS history (
+                    round INTEGER PRIMARY KEY,
+                    avg_client_loss REAL,
+                    avg_client_accuracy REAL,
+                    global_test_loss REAL,
+                    global_test_accuracy REAL,
+                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+                );
+                
+                CREATE TABLE IF NOT EXISTS client_metadata (
+                    client_id INTEGER PRIMARY KEY,
+                    num_samples INTEGER NOT NULL,
+                    is_eligible BOOLEAN NOT NULL,
+                    rounds_participated INTEGER DEFAULT 0,
+                    total_loss REAL DEFAULT 0.0,
+                    total_accuracy REAL DEFAULT 0.0
+                );
+                
+                CREATE TABLE IF NOT EXISTS round_metadata (
+                    round INTEGER PRIMARY KEY,
+                    clients TEXT NOT NULL,  -- JSON array
+                    metrics TEXT NOT NULL,  -- JSON object
+                    duration REAL NOT NULL,
+                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+                );
+            ''')
+            
+            self.db_connection.commit()
+            self.logger.info(f"Database initialized: {self.db_path}")
+            
+        except sqlite3.Error as e:
+            self.logger.error(f"Database initialization error: {e}")
+            raise
+    
+    def _reset_database(self):
+        """Clear all data from database tables"""
+        try:
+            self.db_connection.executescript('''
+                DELETE FROM config;
+                DELETE FROM history;
+                DELETE FROM client_metadata;
+                DELETE FROM round_metadata;
+            ''')
+            self.db_connection.commit()
+            self.logger.info("Database reset completed")
+        except sqlite3.Error as e:
+            self.logger.error(f"Database reset error: {e}")
+            raise
+    
+    def _store_config(self, config: FLConfig):
+        """Store configuration in database"""
+        try:
+            # Note: num_rounds and distribution are not in the provided FLConfig dataclass
+            # Adjusting to only store available attributes.
+            config_data = {
+                'num_clients': config.num_clients,
+                'clients_per_round': config.clients_per_round,
+                'local_epochs': config.local_epochs,
+                'batch_size': config.batch_size,
+                'client_lr': config.client_lr,
+                'dataset': config.dataset,
+                'non_iid_type': config.non_iid_type,
+                'aggregation_method': config.aggregation_method,
+                'eval_every': config.eval_every
+            }
+            
+            for key, value in config_data.items():
+                self.db_connection.execute(
+                    'INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)',
+                    (key, str(value))
+                )
+            
+            self.db_connection.commit()
+        except (sqlite3.Error, AttributeError) as e:
+            self.logger.error(f"Error storing config: {e}")
+            raise
+    
+    def _store_history_entry(self, round_num: int, metrics: Dict):
+        """Store history entry in database"""
+        try:
+            self.db_connection.execute('''
+                INSERT OR REPLACE INTO history 
+                (round, avg_client_loss, avg_client_accuracy, global_test_loss, global_test_accuracy)
+                VALUES (?, ?, ?, ?, ?)
+            ''', (
+                round_num,
+                metrics.get('avg_client_loss'),
+                metrics.get('avg_client_accuracy'),
+                metrics.get('global_test_loss'),
+                metrics.get('global_test_accuracy')
+            ))
+            self.db_connection.commit()
+        except sqlite3.Error as e:
+            self.logger.error(f"Error storing history: {e}")
+            raise
+    
+    def _store_client_metadata(self, client_id: int, metadata: Dict):
+        """Store client metadata in database"""
+        try:
+            self.db_connection.execute('''
+                INSERT OR REPLACE INTO client_metadata 
+                (client_id, num_samples, is_eligible, rounds_participated, total_loss, total_accuracy)
+                VALUES (?, ?, ?, ?, ?, ?)
+            ''', (
+                client_id,
+                metadata['num_samples'],
+                metadata['is_eligible'],
+                metadata['rounds_participated'],
+                metadata['total_loss'],
+                metadata['total_accuracy']
+            ))
+            self.db_connection.commit()
+        except sqlite3.Error as e:
+            self.logger.error(f"Error storing client metadata: {e}")
+            raise
+    
+    def _update_client_metadata(self, client_id: int, updates: Dict):
+        """Update client metadata in database"""
+        try:
+            # Get current values
+            cursor = self.db_connection.execute(
+                'SELECT rounds_participated, total_loss, total_accuracy FROM client_metadata WHERE client_id = ?',
+                (client_id,)
+            )
+            current = cursor.fetchone()
+            
+            if current:
+                new_rounds = current[0] + updates.get('rounds_participated', 0)
+                new_total_loss = current[1] + updates.get('total_loss', 0.0)
+                new_total_accuracy = current[2] + updates.get('total_accuracy', 0.0)
+                
+                self.db_connection.execute('''
+                    UPDATE client_metadata 
+                    SET rounds_participated = ?, total_loss = ?, total_accuracy = ?
+                    WHERE client_id = ?
+                ''', (new_rounds, new_total_loss, new_total_accuracy, client_id))
+                
+                self.db_connection.commit()
+        except sqlite3.Error as e:
+            self.logger.error(f"Error updating client metadata: {e}")
+            raise
+    
+    def _store_round_metadata(self, metadata: Dict):
+        """Store round metadata in database"""
+        try:
+            self.db_connection.execute('''
+                INSERT OR REPLACE INTO round_metadata (round, clients, metrics, duration)
+                VALUES (?, ?, ?, ?)
+            ''', (
+                metadata['round'],
+                json.dumps(metadata['clients']),
+                json.dumps(metadata['metrics']),
+                metadata['duration']
+            ))
+            self.db_connection.commit()
+        except sqlite3.Error as e:
+            self.logger.error(f"Error storing round metadata: {e}")
+            raise
+    
+    def get_history_log(self) -> Dict[str, List]:
+        """Retrieve history log from database"""
+        try:
+            cursor = self.db_connection.execute(
+                'SELECT round, avg_client_loss, avg_client_accuracy, global_test_loss, global_test_accuracy FROM history ORDER BY round'
+            )
+            
+            history_log = collections.defaultdict(list)
+            for row in cursor.fetchall():
+                history_log['round'].append(row[0])
+                history_log['avg_client_loss'].append(row[1] if row[1] is not None else float('nan'))
+                history_log['avg_client_accuracy'].append(row[2] if row[2] is not None else float('nan'))
+                history_log['global_test_loss'].append(row[3] if row[3] is not None else float('nan'))
+                history_log['global_test_accuracy'].append(row[4] if row[4] is not None else float('nan'))
+            
+            return dict(history_log)
+        except sqlite3.Error as e:
+            self.logger.error(f"Error retrieving history: {e}")
+            return collections.defaultdict(list)
+    
+    def get_client_metadata(self) -> Dict[int, Dict]:
+        """Retrieve client metadata from database"""
+        try:
+            cursor = self.db_connection.execute(
+                'SELECT client_id, num_samples, is_eligible, rounds_participated, total_loss, total_accuracy FROM client_metadata'
+            )
+            
+            metadata = {}
+            for row in cursor.fetchall():
+                metadata[row[0]] = {
+                    'num_samples': row[1],
+                    'is_eligible': bool(row[2]),
+                    'rounds_participated': row[3],
+                    'total_loss': row[4],
+                    'total_accuracy': row[5]
+                }
+            
+            return metadata
+        except sqlite3.Error as e:
+            self.logger.error(f"Error retrieving client metadata: {e}")
+            return {}
+    
+    def get_round_metrics(self) -> List[Dict]:
+        """Retrieve round metrics from database"""
+        try:
+            cursor = self.db_connection.execute(
+                'SELECT round, clients, metrics, duration FROM round_metadata ORDER BY round'
+            )
+            
+            round_metrics = []
+            for row in cursor.fetchall():
+                round_metrics.append({
+                    'round': row[0],
+                    'clients': json.loads(row[1]),
+                    'metrics': json.loads(row[2]),
+                    'duration': row[3]
+                })
+            
+            return round_metrics
+        except sqlite3.Error as e:
+            self.logger.error(f"Error retrieving round metrics: {e}")
+            return []
+    
+    def close_database(self):
+        """Close database connection"""
+        if self.db_connection:
+            try:
+                self.db_connection.close()
+                self.logger.info("Database connection closed")
+            except sqlite3.Error as e:
+                self.logger.error(f"Error closing database: {e}")
     
     def _estimate_model_size(self) -> int:
         """Estimate model size in bytes"""
@@ -408,6 +661,10 @@ class FLCoordinator:
     def reset(self):
         """Reset the simulation state"""
         
+        # Reset database state
+        if self.db_connection:
+            self._reset_database()
+        
         self.state.config = None
         self.state.client_train_datasets = None
         self.state.client_num_samples = None
@@ -416,15 +673,5 @@ class FLCoordinator:
         self.state.global_model = None
         self.state.current_global_weights = None
         self.state.eligible_client_indices = None
-        self.state.history_log = collections.defaultdict(list)
-        self.state.current_round = 0
-        self.state.simulation_initialized = False
-        self.state.model_compiled = False
-        self.state.data_loaded = False
-        self.state.is_training_round_active = False
-        self.state.client_metadata = {}
-        self.state.round_metrics = []
-        self.state.aggregation_strategy = None
-        
-        # Clear TensorFlow session
-        tf.keras.backend.clear_session()
+        self.state.client_metadata.clear() # Limpa o dicionário
+      

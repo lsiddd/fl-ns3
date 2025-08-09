@@ -42,17 +42,24 @@ class DataPartitioner:
     
     def _partition_pathological(self, x_data: np.ndarray, y_data: np.ndarray, 
                                 num_classes: int) -> List[List[int]]:
-        """Pathological non-IID partitioning"""
-        num_classes_per_client = int(max(1, self.config.non_iid_alpha))
-        self.logger.info(f"Applying Pathological non-IID: ~{num_classes_per_client} classes per client")
-        
+        """
+        Pathological non-IID partitioning with direct shard assignment.
+
+        This method creates shards of data, where each shard contains samples
+        from a single class. It then distributes a fixed number of these
+        shards to each client in a deterministic and efficient way.
+        """
+        self.logger.info("Applying direct-assignment Pathological non-IID partitioning.")
+
+        # 1. Create shards from data, one class per shard
         indices_by_label = [np.where(y_data == i)[0] for i in range(num_classes)]
         for idx_list in indices_by_label:
             np.random.shuffle(idx_list)
         
-        # Create shards
         all_shards = []
         for label_idx, indices_list in enumerate(indices_by_label):
+            # The number of shards created per class is heuristic, aiming to have
+            # enough shards for all clients.
             num_shards = max(2, self.config.num_clients // num_classes)
             if len(indices_list) > 0:
                 shards = np.array_split(indices_list, num_shards)
@@ -62,30 +69,47 @@ class DataPartitioner:
         
         np.random.shuffle(all_shards)
         
-        # Distribute shards to clients
+        # 2. Refactored direct distribution logic
         client_data_indices = [[] for _ in range(self.config.num_clients)]
-        client_labels = [set() for _ in range(self.config.num_clients)]
-        
-        shard_idx = 0
-        rounds = 0
-        max_rounds = 3  # Prevent infinite loop
-        
-        while shard_idx < len(all_shards) and rounds < max_rounds:
-            rounds += 1
-            for client_id in range(self.config.num_clients):
-                if shard_idx >= len(all_shards):
-                    break
-                    
-                label, indices = all_shards[shard_idx]
-                
-                # Assign if client has room for new class or already has this class
-                if (len(client_labels[client_id]) < num_classes_per_client or 
-                    label in client_labels[client_id]):
-                    client_data_indices[client_id].extend(indices)
-                    client_labels[client_id].add(label)
-                    shard_idx += 1
-        
-        # Clean up duplicates
+        num_shards_per_client = len(all_shards) // self.config.num_clients
+
+        if num_shards_per_client == 0 and len(all_shards) > 0:
+            self.logger.warning(
+                f"Pathological partitioning: Not enough shards ({len(all_shards)}) "
+                f"for the number of clients ({self.config.num_clients}). "
+                "Some clients may not get data."
+            )
+
+        self.logger.info(f"Total shards: {len(all_shards)}. Assigning {num_shards_per_client} shards per client.")
+
+        shard_cursor = 0
+        for client_id in range(self.config.num_clients):
+            # Calculate start and end index for this client's shards
+            start_idx = shard_cursor
+            end_idx = shard_cursor + num_shards_per_client
+            
+            # Stop if there are no more shards to distribute
+            if start_idx >= len(all_shards):
+                break
+
+            # Get the slice of shards for the current client
+            assigned_shards = all_shards[start_idx:end_idx]
+
+            # Extract indices from the shards and assign to the client
+            for _label, indices in assigned_shards:
+                client_data_indices[client_id].extend(indices)
+            
+            shard_cursor = end_idx
+
+        # Distribute any remaining shards (due to integer division) one by one
+        remaining_shards = all_shards[shard_cursor:]
+        if remaining_shards:
+            self.logger.info(f"Distributing {len(remaining_shards)} remaining shards to the first {len(remaining_shards)} clients.")
+            for i, (_label, indices) in enumerate(remaining_shards):
+                # Distribute remainder to clients in a round-robin fashion
+                client_data_indices[i % self.config.num_clients].extend(indices)
+
+        # 3. Clean up potential duplicates
         for i in range(self.config.num_clients):
             client_data_indices[i] = list(np.unique(client_data_indices[i]))
             

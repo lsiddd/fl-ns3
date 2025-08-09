@@ -106,12 +106,13 @@ class FLAPIServer:
         try:
             self.coordinator.initialize(self.state.config)
             
-            # Get initial evaluation
+            # Get initial evaluation from database
+            history_log = self.coordinator.get_history_log()
             initial_metrics = {}
-            if self.state.history_log['global_test_loss']:
+            if history_log.get('global_test_loss'):
                 initial_metrics = {
-                    'loss': self.state.history_log['global_test_loss'][0],
-                    'accuracy': self.state.history_log['global_test_accuracy'][0]
+                    'loss': history_log['global_test_loss'][0],
+                    'accuracy': history_log['global_test_accuracy'][0]
                 }
             
             return jsonify({
@@ -161,21 +162,117 @@ class FLAPIServer:
             return jsonify(response), 200
             
         except Exception as e:
-            self.coordinator.logger.exception(f"Round execution error: {e}")
+            self.coordinator.logger.exception(f"Error starting round: {e}")
             return jsonify({"error": str(e)}), 500
+    
+    def _run_round_async(self, selected_clients):
+        """Execute round in background thread"""
+        self.state.is_training_round_active = True
+        
+        try:
+            # Run round
+            results = self.coordinator.run_round(selected_clients)
             
+            # Format response
+            response = {
+                "message": f"Round {results['round']} completed",
+                "round": results['round'],
+                "selected_clients_ns3_indices": results['selected_clients'],
+                "avg_client_loss": results['metrics'].get('avg_client_loss', float('nan')),
+                "avg_client_accuracy": results['metrics'].get('avg_client_accuracy', float('nan')),
+                "global_test_loss": results['metrics'].get('global_test_loss', float('nan')),
+                "global_test_accuracy": results['metrics'].get('global_test_accuracy', float('nan')),
+                "round_duration_seconds": results['duration'],
+                "simulated_client_performance": results['client_performance']
+            }
+            
+            return response
+            
+        except Exception as e:
+            self.coordinator.logger.exception(f"Round execution error: {e}")
+            raise
         finally:
             self.state.is_training_round_active = False
+    
+    def get_task_status(self, task_id):
+        """Get status of asynchronous task"""
+        
+        if task_id not in self.active_tasks:
+            return jsonify({"error": "Task not found"}), 404
+        
+        future = self.active_tasks[task_id]
+        
+        if future.running():
+            return jsonify({
+                "task_id": task_id,
+                "status": "RUNNING"
+            }), 200
+        elif future.done():
+            try:
+                result = future.result()
+                # Clean up completed task
+                del self.active_tasks[task_id]
+                
+                return jsonify({
+                    "task_id": task_id,
+                    "status": "COMPLETE",
+                    "result": result
+                }), 200
+            except Exception as e:
+                # Clean up failed task
+                del self.active_tasks[task_id]
+                self.coordinator.logger.exception(f"Task {task_id} failed: {e}")
+                return jsonify({
+                    "task_id": task_id,
+                    "status": "FAILED",
+                    "error": str(e)
+                }), 500
+        else:
+            return jsonify({
+                "task_id": task_id,
+                "status": "PENDING"
+            }), 200
+    
+    def _setup_signal_handlers(self):
+        """Setup signal handlers for graceful shutdown"""
+        signal.signal(signal.SIGTERM, self._signal_handler)
+        signal.signal(signal.SIGINT, self._signal_handler)
+    
+    def _signal_handler(self, signum, frame):
+        """Handle shutdown signals gracefully"""
+        self.coordinator.logger.info(f"Received signal {signum}, starting graceful shutdown...")
+        self.shutting_down = True
+        
+        # Wait for active tasks to complete
+        if self.active_tasks:
+            self.coordinator.logger.info(f"Waiting for {len(self.active_tasks)} active tasks to complete...")
+            for task_id, future in list(self.active_tasks.items()):
+                try:
+                    future.result(timeout=30)  # 30 second timeout
+                except Exception as e:
+                    self.coordinator.logger.warning(f"Task {task_id} did not complete cleanly: {e}")
+        
+        # Shutdown thread pool
+        self.coordinator.logger.info("Shutting down thread pool...")
+        self.executor.shutdown(wait=True)
+        
+        # Close database connection
+        self.coordinator.logger.info("Closing database connection...")
+        self.coordinator.close_database()
+        
+        self.coordinator.logger.info("Graceful shutdown complete")
+        exit(0)
     
     def get_status(self):
         """Get simulation status"""
         
         config_dict = asdict(self.state.config) if self.state.config else "Not configured"
         
-        # Format history
+        # Get history from database
+        history_log = self.coordinator.get_history_log()
         history = {}
-        if self.state.history_log:
-            for key, values in self.state.history_log.items():
+        if history_log:
+            for key, values in history_log.items():
                 if key in ['avg_client_loss', 'avg_client_accuracy', 
                           'global_test_loss', 'global_test_accuracy']:
                     history[key] = [
@@ -243,7 +340,7 @@ class FLAPIServer:
                     "client_id": client_id,
                     "num_unique_samples": self.state.client_num_samples[client_id],
                     "is_eligible": client_id in self.state.eligible_client_indices,
-                    "metadata": self.state.client_metadata.get(client_id, {})
+                    "metadata": self.coordinator.get_client_metadata().get(client_id, {})
                 }
                 
                 return jsonify(info), 200
@@ -258,7 +355,7 @@ class FLAPIServer:
                     "client_id": i,
                     "num_unique_samples": self.state.client_num_samples[i],
                     "is_eligible": i in self.state.eligible_client_indices,
-                    "metadata": self.state.client_metadata.get(i, {})
+                    "metadata": self.coordinator.get_client_metadata().get(i, {})
                 })
             
             return jsonify({"all_clients_info": all_info}), 200
