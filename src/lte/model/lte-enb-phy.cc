@@ -898,7 +898,7 @@ LteEnbPhy::CreatePuschCqiReport(const SpectrumValue& sinr)
         // convert from double to fixed point notation Sxxxxxxxxxxx.xxx
         int16_t sinrFp = LteFfConverter::double2fpS11dot3(sinrdb);
         ulcqi.m_ulCqi.m_sinr.push_back(sinrFp);
-        i++;
+        // i++;
     }
     return (ulcqi);
 }

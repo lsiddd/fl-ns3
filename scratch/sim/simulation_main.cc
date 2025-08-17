@@ -57,7 +57,7 @@ int main(int argc, char *argv[]) {
   Simulator::Schedule(Seconds(1.0), &MetricsCollector::networkInfo, monitor);
   NS_LOG_INFO("Manager and networkInfo functions scheduled.");
 
-  NetworkSetup::setupAnimation();
+  // NetworkSetup::setupAnimation();
 
   Simulator::Stop(Seconds(simStopTime));
   NS_LOG_INFO("Starting ns-3 Simulation. Simulation will stop at " << simStopTime << "s.");

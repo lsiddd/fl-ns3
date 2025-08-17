@@ -8,11 +8,9 @@ services:
   fl-api:
     build: .
     container_name: fl-api-server
-    command: python3 scratch/fl_api.py --port 5000
+    command: python3 scratch/fl_api.py --port 5005
     networks:
       - fl-net
-    ports:
-      - "8080:5000"
     volumes:
       # Mount the entire project directory to run the Python script from the host
       - .:/app
@@ -25,7 +23,7 @@ services:
     networks:
       - fl-net
     environment:
-      - FL_API_URL=http://fl-api:5000
+      - FL_API_URL=http://fl-api:5005
     command: >
       bash -c "
         set -e;
@@ -45,7 +43,7 @@ services:
         echo 'FL API server is responsive. Starting ns-3 simulation.';
         
         # Step 3: Run the simulation using the newly compiled executable.
-        ./ns3 run 'simulation';
+        ./ns3 run 'simulation_main';
       "
     volumes:
       # Mount the entire project directory.

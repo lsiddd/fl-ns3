@@ -170,10 +170,10 @@ int FLCoordinator::callPythonApi(const std::string &endpoint,
 }
 
 bool FLCoordinator::initializeFlApi() {
-    FL_API_BASE_URL = getEnvVar("FL_API_URL", "http://127.0.0.1:5000");
+    FL_API_BASE_URL = getEnvVar("FL_API_URL", "http://127.0.0.1:5005");
     
     NS_LOG_INFO("Configuring Python FL API...");
-    int api_port = 5000;
+    int api_port = 5005;
     json fl_config_payload;
     fl_config_payload["dataset"] = "mnist";
     fl_config_payload["num_clients"] = FL_API_NUM_CLIENTS;
