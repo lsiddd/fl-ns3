@@ -21,7 +21,10 @@ class DataPartitioner:
     def partition_data(self, x_data: np.ndarray, y_data: np.ndarray, 
                        num_classes: int) -> List[List[int]]:
         """Partition data according to configuration"""
-        non_iid_type = NonIIDType(self.config.non_iid_type)
+        try:
+            non_iid_type = NonIIDType(self.config.non_iid_type)
+        except ValueError:
+            raise ValueError(f"Unknown non-IID type: {self.config.non_iid_type}")
         
         if non_iid_type == NonIIDType.IID:
             return self._partition_iid(x_data, y_data)
@@ -133,7 +136,10 @@ class DataPartitioner:
     
     def apply_quantity_skew(self, client_indices: List[List[int]]) -> List[List[int]]:
         """Apply quantity skew to client data"""
-        skew_type = QuantitySkewType(self.config.quantity_skew_type)
+        try:
+            skew_type = QuantitySkewType(self.config.quantity_skew_type)
+        except ValueError:
+            raise ValueError(f"Unknown quantity skew type: {self.config.quantity_skew_type}")
         
         if skew_type == QuantitySkewType.UNIFORM:
             return client_indices
@@ -266,7 +272,11 @@ class DataLoader:
     
     def _apply_feature_skew(self, x_data: np.ndarray, client_id: int) -> np.ndarray:
         """Apply feature skew to client data"""
-        skew_type = FeatureSkewType(self.config.feature_skew_type)
+        try:
+            skew_type = FeatureSkewType(self.config.feature_skew_type)
+        except ValueError:
+            # For invalid types, fall back to no processing
+            return x_data.astype('float32')
         
         if skew_type == FeatureSkewType.NONE:
             return x_data.astype('float32')
@@ -275,7 +285,7 @@ class DataLoader:
             noise_std = self.config.noise_std_dev * 255.0
             noise = np.random.normal(0, noise_std, x_processed.shape)
             x_processed = np.clip(x_processed + noise, 0.0, 255.0)
-            return x_processed
+            return x_processed.astype('float32')
         else:
             return x_data.astype('float32')
     

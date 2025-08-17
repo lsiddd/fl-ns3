@@ -69,7 +69,10 @@ class ClientTrainer:
     
     def _create_optimizer(self) -> tf.keras.optimizers.Optimizer:
         """Create optimizer based on configuration"""
-        opt_type = OptimizerType(self.config.client_optimizer)
+        try:
+            opt_type = OptimizerType(self.config.client_optimizer)
+        except ValueError:
+            raise ValueError(f"Unknown optimizer: {self.config.client_optimizer}")
         
         if opt_type == OptimizerType.SGD:
             return tf.keras.optimizers.SGD(learning_rate=self.config.client_lr)

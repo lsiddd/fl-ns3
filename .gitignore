@@ -80,3 +80,4 @@ cmake-build-release/
 /classes/
 *~
 ping_response.txt
+scratch/.coverage

@@ -68,8 +68,8 @@ class FLAPIServer:
             }), 400
         
         try:
-            data = request.get_json()
-            if not data:
+            data = request.get_json(silent=True)
+            if data is None:
                 return jsonify({"error": "No configuration provided"}), 400
             
             # Create config from request
@@ -108,7 +108,8 @@ class FLAPIServer:
             
             # Get initial evaluation
             initial_metrics = {}
-            if self.state.history_log['global_test_loss']:
+            if ('global_test_loss' in self.state.history_log and 
+                self.state.history_log['global_test_loss']):
                 initial_metrics = {
                     'loss': self.state.history_log['global_test_loss'][0],
                     'accuracy': self.state.history_log['global_test_accuracy'][0]
