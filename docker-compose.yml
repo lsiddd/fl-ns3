@@ -1,3 +1,5 @@
+# docker-compose.yml
+
 version: '3.8'
 
 networks:
@@ -8,11 +10,10 @@ services:
   fl-api:
     build: .
     container_name: fl-api-server
-    command: python3 scratch/fl_api.py --port 5005
+    command: python3 scratch/main.py --port 5005
     networks:
       - fl-net
     volumes:
-      # Mount the entire project directory to run the Python script from the host
       - .:/app
 
   ns3-simulation:
@@ -24,30 +25,27 @@ services:
       - fl-net
     environment:
       - FL_API_URL=http://fl-api:5005
+    # Keep the container alive and interactive for the shell
+    stdin_open: true  # Add this line
+    tty: true         # Add this line
     command: >
       bash -c "
         set -e;
         
-        # Step 1: Configure and build ns-3. 
-        # This will use the host's files via the volume mount. 
-        # If it's already built, it will be very fast.
-        echo 'Configuring and building ns-3 simulation...';
-        ./ns3 configure;
+        echo 'Configuring and building ns-3 simulation in DEBUG mode...';
+        # IMPORTANT: Build in debug mode for GDB
+        ./ns3 configure --build-profile=debug;
         ./ns3 build;
 
-        # Step 2: Wait for the FL API server to be ready.
-        while ! curl -s http://fl-api:5000/ping > /dev/null; do
+        while ! curl -s http://fl-api:5005/ping > /dev/null; do
           echo 'Waiting for FL API server...';
           sleep 2;
         done;
         echo 'FL API server is responsive. Starting ns-3 simulation.';
         
-        # Step 3: Run the simulation using the newly compiled executable.
-        ./ns3 run 'simulation_main';
+        # Run the simulation. If it fails (crashes), start a bash shell.
+        ./ns3 run 'simulation_main' || bash;
       "
     volumes:
-      # Mount the entire project directory.
-      # This makes all source files, build, and cmake-cache available from the host.
       - .:/app
-      # Explicitly mount the results directory to get output back on the host.
       - ./results:/app/results
