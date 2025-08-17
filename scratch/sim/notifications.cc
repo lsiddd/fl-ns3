@@ -18,8 +18,8 @@ NS_LOG_COMPONENT_DEFINE("Notifications");
 // Event handling functions
 // Changed signature: removed std::string context
 void NotifyConnectionEstablishedUe(uint64_t imsi, uint16_t cellid, uint16_t rnti) {
-    std::cout << Simulator::Now().GetSeconds() << " seconds UE IMSI " << imsi
-              << ": connected to CellId " << cellid << " with RNTI " << rnti << std::endl;
+    NS_LOG_INFO(Simulator::Now().GetSeconds() << "s UE IMSI " << imsi
+              << ": connected to CellId " << cellid << " with RNTI " << rnti);
 }
 
 void NotifyHandoverStartUe(std::string context,
@@ -27,21 +27,20 @@ void NotifyHandoverStartUe(std::string context,
                            uint16_t cellid,
                            uint16_t rnti,
                            uint16_t targetCellId) {
-    std::cout << Simulator::Now().GetSeconds() << " seconds UE IMSI " << imsi
+    NS_LOG_INFO(Simulator::Now().GetSeconds() << "s UE IMSI " << imsi
               << ": previously connected to CellId " << cellid << ", doing handover to CellId "
-              << targetCellId << std::endl;
+              << targetCellId);
 }
 
 void NotifyHandoverEndOkUe(std::string context, uint64_t imsi, uint16_t cellid, uint16_t rnti) {
-    std::cout << Simulator::Now().GetSeconds() << " seconds UE IMSI " << imsi
-              << ": successful handover to CellId " << cellid << " with RNTI " << rnti << std::endl;
+    NS_LOG_INFO(Simulator::Now().GetSeconds() << "s UE IMSI " << imsi
+              << ": successful handover to CellId " << cellid << " with RNTI " << rnti);
 }
 
 // Changed signature: removed std::string context
 void NotifyConnectionEstablishedEnb(uint64_t imsi, uint16_t cellid, uint16_t rnti) {
-    std::cout << Simulator::Now().GetSeconds() << " seconds eNB CellId " << cellid
-              << ": successful connection of UE with IMSI " << imsi << " RNTI " << rnti
-              << std::endl;
+    NS_LOG_INFO(Simulator::Now().GetSeconds() << "s eNB CellId " << cellid
+              << ": successful connection of UE with IMSI " << imsi << " RNTI " << rnti);
 }
 
 void NotifyHandoverStartEnb(std::string context,
@@ -49,12 +48,12 @@ void NotifyHandoverStartEnb(std::string context,
                             uint16_t cellid,
                             uint16_t rnti,
                             uint16_t targetCellId) {
-    std::cout << Simulator::Now().GetSeconds() << " seconds eNB CellId " << cellid
+    NS_LOG_INFO(Simulator::Now().GetSeconds() << "s eNB CellId " << cellid
               << ": start handover of UE with IMSI " << imsi << " RNTI " << rnti << " to CellId "
-              << targetCellId << std::endl;
+              << targetCellId);
 }
 
 void NotifyHandoverEndOkEnb(std::string context, uint64_t imsi, uint16_t cellid, uint16_t rnti) {
-    std::cout << Simulator::Now().GetSeconds() << " seconds eNB CellId " << cellid
-              << ": completed handover of UE with IMSI " << imsi << " RNTI " << rnti << std::endl;
+    NS_LOG_INFO(Simulator::Now().GetSeconds() << "s eNB CellId " << cellid
+              << ": completed handover of UE with IMSI " << imsi << " RNTI " << rnti);
 }

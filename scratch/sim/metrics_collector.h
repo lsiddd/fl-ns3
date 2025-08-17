@@ -22,6 +22,7 @@ public:
     static void networkInfo(Ptr<FlowMonitor> monitor);
     static void exportDataFrames();
     static void setupRsrpSinrTracing();
+    static void logFlMetrics(int clientId, double accuracy);
 
     static void reportUeSinrRsrp(uint16_t cellId, uint16_t rnti, double rsrp, double sinr, uint8_t componentCarrierId);
     static void reportUeSinrRsrp(std::string context, uint16_t cellId, uint16_t rnti, double rsrp, double sinr, uint8_t componentCarrierId);

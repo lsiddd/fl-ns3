@@ -296,6 +296,8 @@ bool FLCoordinator::triggerAndProcessFLRoundInApi() {
         for (auto const &[client_id_str, perf_data] : client_perf_details.items()) {
           try {
             int client_id = std::stoi(client_id_str);
+            double accuracy = perf_data.value("accuracy", 0.0);
+            MetricsCollector::logFlMetrics(client_id, accuracy);
             for (auto &client_model_info : selectedClientsForCurrentRound) {
               if (client_model_info.node->GetId() == (uint32_t)client_id) {
                 client_model_info.nodeTrainingTime =

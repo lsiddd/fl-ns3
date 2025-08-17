@@ -24,37 +24,37 @@ struct DataInitializer {
 DataInitializer globalDataInitializer;
 
 std::pair<uint16_t, uint16_t> NetworkUtils::getUeRntiCellid(Ptr<ns3::NetDevice> ueNetDevice) {
-    NS_LOG_DEBUG("getUeRntiCellid: Attempting to get RNTI and CellID for NetDevice: " << (ueNetDevice ? ueNetDevice->GetInstanceTypeId().GetName() : "null"));
+    NS_LOG_INFO("getUeRntiCellid: Attempting to get RNTI and CellID for NetDevice: " << (ueNetDevice ? ueNetDevice->GetInstanceTypeId().GetName() : "null"));
 
     if (!ueNetDevice) {
-        NS_LOG_DEBUG("getUeRntiCellid: Input ueNetDevice is null. Returning {0, 0}.");
+        NS_LOG_INFO("getUeRntiCellid: Input ueNetDevice is null. Returning {0, 0}.");
         return {0, 0};
     }
 
     auto lteDevice = ueNetDevice->GetObject<LteUeNetDevice>();
     if (!lteDevice) {
-        NS_LOG_DEBUG("getUeRntiCellid: NetDevice is not an LteUeNetDevice or GetObject failed. Device Type: " << ueNetDevice->GetInstanceTypeId().GetName() << ". Returning {0, 0}.");
+        NS_LOG_INFO("getUeRntiCellid: NetDevice is not an LteUeNetDevice or GetObject failed. Device Type: " << ueNetDevice->GetInstanceTypeId().GetName() << ". Returning {0, 0}.");
         return {0, 0};
     }
 
-    NS_LOG_DEBUG("getUeRntiCellid: LteUeNetDevice found: " << lteDevice);
+    NS_LOG_INFO("getUeRntiCellid: LteUeNetDevice found: " << lteDevice);
 
     if (!lteDevice->GetRrc()) {
-        NS_LOG_DEBUG("getUeRntiCellid: LteUeNetDevice " << lteDevice << " has no RRC instance. Returning {0, 0}.");
+        NS_LOG_INFO("getUeRntiCellid: LteUeNetDevice " << lteDevice << " has no RRC instance. Returning {0, 0}.");
         return {0, 0};
     }
 
     LteUeRrc::State rrcState = lteDevice->GetRrc()->GetState();
-    NS_LOG_DEBUG("getUeRntiCellid: LteUeRrc State: " << rrcState);
+    NS_LOG_INFO("getUeRntiCellid: LteUeRrc State: " << rrcState);
 
     if (rrcState != LteUeRrc::CONNECTED_NORMALLY && rrcState != LteUeRrc::CONNECTED_HANDOVER) {
-        NS_LOG_DEBUG("getUeRntiCellid: UE RRC not in a connected state (Current state: " << rrcState << "). Returning {0, 0}.");
+        NS_LOG_INFO("getUeRntiCellid: UE RRC not in a connected state (Current state: " << rrcState << "). Returning {0, 0}.");
         return {0, 0};
     }
 
     auto rnti = lteDevice->GetRrc()->GetRnti();
     auto cellid = lteDevice->GetRrc()->GetCellId();
-    NS_LOG_DEBUG("getUeRntiCellid: Successfully retrieved RNTI: " << rnti << ", CellID: " << cellid << " for UE connected to eNB.");
+    NS_LOG_INFO("getUeRntiCellid: Successfully retrieved RNTI: " << rnti << ", CellID: " << cellid << " for UE connected to eNB.");
     return std::make_pair(rnti, cellid);
 }
 
@@ -62,11 +62,11 @@ std::vector<NodesIps> NetworkUtils::nodeToIps() {
     NS_LOG_INFO("nodeToIps: Starting to map UE Node IDs to their IP addresses.");
 
     std::vector<NodesIps> nodes_ips_list;
-    NS_LOG_DEBUG("nodeToIps: Iterating over " << ueNodes.GetN() << " UE nodes.");
+    NS_LOG_INFO("nodeToIps: Iterating over " << ueNodes.GetN() << " UE nodes.");
 
     for (uint32_t i = 0; i < ueNodes.GetN(); i++) {
         Ptr<Node> ueNode = ueNodes.Get(i);
-        NS_LOG_DEBUG("nodeToIps: Processing UE Node " << i << " (Node ID: " << (ueNode ? ueNode->GetId() : -1) << ")");
+        NS_LOG_INFO("nodeToIps: Processing UE Node " << i << " (Node ID: " << (ueNode ? ueNode->GetId() : -1) << ")");
 
         if (!ueNode) {
             NS_LOG_WARN("nodeToIps: UE Node at index " << i << " is null. Skipping.");
@@ -75,11 +75,11 @@ std::vector<NodesIps> NetworkUtils::nodeToIps() {
 
         Ptr<Ipv4> ipv4 = ueNode->GetObject<Ipv4>();
         if (ipv4) {
-            NS_LOG_DEBUG("nodeToIps: Node " << ueNode->GetId() << " has Ipv4 object. Number of interfaces: " << ipv4->GetNInterfaces());
+            NS_LOG_INFO("nodeToIps: Node " << ueNode->GetId() << " has Ipv4 object. Number of interfaces: " << ipv4->GetNInterfaces());
             if (ipv4->GetNInterfaces() > 1) {
                 Ipv4InterfaceAddress iaddr = ipv4->GetAddress(1, 0);
                 Ipv4Address ipAddr = iaddr.GetLocal();
-                NS_LOG_DEBUG("nodeToIps: Node ID: " << ueNode->GetId() << ", UE Index: " << i << ", IP Address: " << ipAddr);
+                NS_LOG_INFO("nodeToIps: Node ID: " << ueNode->GetId() << ", UE Index: " << i << ", IP Address: " << ipAddr);
                 nodes_ips_list.push_back(NodesIps(ueNode->GetId(), i, ipAddr));
             } else {
                 NS_LOG_WARN("nodeToIps: Node " << ueNode->GetId() << " (UE Index " << i << ") has Ipv4 object but less than 2 interfaces (found "
@@ -114,7 +114,7 @@ void NetworkUtils::sinkRxCallback(Ptr<const Packet> packet, const Address &from)
     FinHeader finHeader;
     if (packet->PeekHeader(finHeader) && finHeader.IsFin()) {
         fin_packet = true;
-        NS_LOG_DEBUG("sinkRxCallback: FIN header found in packet");
+        NS_LOG_INFO("sinkRxCallback: FIN header found in packet");
     }
 
     if (fin_packet) {
@@ -124,11 +124,11 @@ void NetworkUtils::sinkRxCallback(Ptr<const Packet> packet, const Address &from)
             endOfStreamTimes[senderIp] = receiveTime;
             NS_LOG_INFO("sinkRxCallback: Recorded end-of-stream time " << receiveTime << "s for sender " << senderIp);
         } else {
-            NS_LOG_DEBUG("sinkRxCallback: Received duplicate FIN signal from " << senderIp
+            NS_LOG_INFO("sinkRxCallback: Received duplicate FIN signal from " << senderIp
                                                                                << " . Original time: " << endOfStreamTimes[senderIp] << "s, new time: " << receiveTime << "s. Not updating.");
         }
     } else {
-        NS_LOG_DEBUG("sinkRxCallback: Packet from " << senderIp << " is a data packet (no 'b' found in first " << bytes_to_check << " bytes).");
+        NS_LOG_INFO("sinkRxCallback: Packet from " << senderIp << " is a data packet (no 'b' found in first " << bytes_to_check << " bytes).");
     }
 }
 
@@ -147,7 +147,7 @@ void NetworkUtils::sendStream(Ptr<Node> sendingNode, Ptr<Node> receivingNode, in
 
     static uint16_t port_counter = 5000;
     uint16_t current_port = port_counter++;
-    NS_LOG_DEBUG("sendStream: Using port " << current_port << " for this stream.");
+    NS_LOG_INFO("sendStream: Using port " << current_port << " for this stream.");
 
     if (size == 0) {
         NS_LOG_INFO("sendStream: Requested size is 0. Nothing to send from Node " << sendingNode->GetId() << " to Node " << receivingNode->GetId() << ". Skipping stream setup.");
@@ -157,12 +157,12 @@ void NetworkUtils::sendStream(Ptr<Node> sendingNode, Ptr<Node> receivingNode, in
     uint32_t nPackets = (size + writeSize - 1) / writeSize;
     if (nPackets == 0 && size > 0) {
         nPackets = 1;
-        NS_LOG_DEBUG("sendStream: Size " << size << " is less than writeSize " << writeSize << ", adjusting nPackets to 1.");
+        NS_LOG_INFO("sendStream: Size " << size << " is less than writeSize " << writeSize << ", adjusting nPackets to 1.");
     } else if (nPackets > 0 && size % writeSize == 0) {
         nPackets += 1;
-        NS_LOG_DEBUG("sendStream: Size " << size << " is a multiple of writeSize " << writeSize << ", adjusting nPackets to " << nPackets << " for FIN signal.");
+        NS_LOG_INFO("sendStream: Size " << size << " is a multiple of writeSize " << writeSize << ", adjusting nPackets to " << nPackets << " for FIN signal.");
     } else {
-        NS_LOG_DEBUG("sendStream: nPackets calculated: " << nPackets);
+        NS_LOG_INFO("sendStream: nPackets calculated: " << nPackets);
     }
 
     Ptr<Ipv4> ipv4Receiver = receivingNode->GetObject<Ipv4>();
@@ -182,7 +182,7 @@ void NetworkUtils::sendStream(Ptr<Node> sendingNode, Ptr<Node> receivingNode, in
         NS_LOG_ERROR("sendStream: Failed to get valid IP address for receiving node " << receivingNode->GetId() << ". Aborting.");
         return;
     }
-    NS_LOG_DEBUG("sendStream: Receiving Node " << receivingNode->GetId() << " IP Address: " << ipAddrReceiver);
+    NS_LOG_INFO("sendStream: Receiving Node " << receivingNode->GetId() << " IP Address: " << ipAddrReceiver);
 
     NS_LOG_INFO(Simulator::Now().GetSeconds()
                 << "s: Node " << sendingNode->GetId() << " starting stream to "
@@ -191,7 +191,7 @@ void NetworkUtils::sendStream(Ptr<Node> sendingNode, Ptr<Node> receivingNode, in
 
     Address sinkAddress(InetSocketAddress(ipAddrReceiver, current_port));
     PacketSinkHelper packetSinkHelper("ns3::TcpSocketFactory", InetSocketAddress(Ipv4Address::GetAny(), current_port));
-    NS_LOG_DEBUG("sendStream: Installing TCP PacketSink on Node " << receivingNode->GetId() << " at " << InetSocketAddress(Ipv4Address::GetAny(), current_port));
+    NS_LOG_INFO("sendStream: Installing TCP PacketSink on Node " << receivingNode->GetId() << " at " << InetSocketAddress(Ipv4Address::GetAny(), current_port));
     ApplicationContainer sinkApps = packetSinkHelper.Install(receivingNode);
 
     Time streamStartTime = MilliSeconds(200);
@@ -209,17 +209,17 @@ void NetworkUtils::sendStream(Ptr<Node> sendingNode, Ptr<Node> receivingNode, in
         return;
     }
     sink->TraceConnectWithoutContext("Rx", MakeCallback(&NetworkUtils::sinkRxCallback));
-    NS_LOG_DEBUG("sendStream: Connected Rx trace of PacketSink on Node " << receivingNode->GetId() << " to sinkRxCallback.");
+    NS_LOG_INFO("sendStream: Connected Rx trace of PacketSink on Node " << receivingNode->GetId() << " to sinkRxCallback.");
 
-    NS_LOG_DEBUG("sendStream: Creating TCP socket on sending Node " << sendingNode->GetId());
+    NS_LOG_INFO("sendStream: Creating TCP socket on sending Node " << sendingNode->GetId());
     Ptr<Socket> ns3TcpSocket = Socket::CreateSocket(sendingNode, TcpSocketFactory::GetTypeId());
     if (!ns3TcpSocket) {
         NS_LOG_ERROR("sendStream: Failed to create TCP socket on sending Node " << sendingNode->GetId() << ". Aborting.");
         return;
     }
-    NS_LOG_DEBUG("sendStream: TCP socket created successfully on Node " << sendingNode->GetId());
+    NS_LOG_INFO("sendStream: TCP socket created successfully on Node " << sendingNode->GetId());
 
-    NS_LOG_DEBUG("sendStream: Creating MyApp application object.");
+    NS_LOG_INFO("sendStream: Creating MyApp application object.");
     Ptr<MyApp> app = CreateObject<MyApp>();
     NS_LOG_INFO("sendStream: Setting up MyApp on Node " << sendingNode->GetId() << " to send to " << sinkAddress
                                                         << ", packetSizeForScheduling=" << writeSize << ", nPackets=" << nPackets
@@ -228,7 +228,7 @@ void NetworkUtils::sendStream(Ptr<Node> sendingNode, Ptr<Node> receivingNode, in
                DataRate("1Mbps"), writeSize, data, dataFin);
 
     sendingNode->AddApplication(app);
-    NS_LOG_DEBUG("sendStream: MyApp added to Node " << sendingNode->GetId());
+    NS_LOG_INFO("sendStream: MyApp added to Node " << sendingNode->GetId());
 
     app->SetStartTime(streamStartTime);
 
@@ -237,7 +237,7 @@ void NetworkUtils::sendStream(Ptr<Node> sendingNode, Ptr<Node> receivingNode, in
 
 bool NetworkUtils::checkFinishedTransmission(const std::vector<NodesIps> &all_nodes_ips,
                                const std::vector<ClientModels> &selected_clients_for_round) {
-    NS_LOG_DEBUG("checkFinishedTransmission: Checking finished transmissions. Number of all_nodes_ips: " << all_nodes_ips.size()
+    NS_LOG_INFO("checkFinishedTransmission: Checking finished transmissions. Number of all_nodes_ips: " << all_nodes_ips.size()
                                                                                                          << ", Number of selected_clients_for_round: " << selected_clients_for_round.size());
 
     if (selected_clients_for_round.empty()) {
@@ -246,14 +246,14 @@ bool NetworkUtils::checkFinishedTransmission(const std::vector<NodesIps> &all_no
     }
 
     size_t finished_count = 0;
-    NS_LOG_DEBUG("checkFinishedTransmission: Iterating through " << selected_clients_for_round.size() << " selected clients to check transmission status.");
+    NS_LOG_INFO("checkFinishedTransmission: Iterating through " << selected_clients_for_round.size() << " selected clients to check transmission status.");
     for (const auto &client_model : selected_clients_for_round) {
         if (!client_model.node) {
             NS_LOG_WARN("checkFinishedTransmission: Client model has a null Ptr<Node>. Skipping this client.");
             continue;
         }
         uint32_t clientNodeId = client_model.node->GetId();
-        NS_LOG_DEBUG("checkFinishedTransmission: Checking client with Node ID: " << clientNodeId);
+        NS_LOG_INFO("checkFinishedTransmission: Checking client with Node ID: " << clientNodeId);
 
         Ipv4Address client_ip;
         bool ip_found = false;
@@ -261,17 +261,17 @@ bool NetworkUtils::checkFinishedTransmission(const std::vector<NodesIps> &all_no
             if (nip.nodeId == clientNodeId) {
                 client_ip = nip.ip;
                 ip_found = true;
-                NS_LOG_DEBUG("checkFinishedTransmission: Found IP " << client_ip << " for Node ID " << clientNodeId);
+                NS_LOG_INFO("checkFinishedTransmission: Found IP " << client_ip << " for Node ID " << clientNodeId);
                 break;
             }
         }
 
         if (ip_found) {
             if (endOfStreamTimes.count(client_ip)) {
-                NS_LOG_DEBUG("checkFinishedTransmission: Client " << clientNodeId << " (IP: " << client_ip << ") has finished transmission (EOS time found: " << endOfStreamTimes.at(client_ip) << "s).");
+                NS_LOG_INFO("checkFinishedTransmission: Client " << clientNodeId << " (IP: " << client_ip << ") has finished transmission (EOS time found: " << endOfStreamTimes.at(client_ip) << "s).");
                 finished_count++;
             } else {
-                NS_LOG_DEBUG("checkFinishedTransmission: Client " << clientNodeId << " (IP: " << client_ip << ") has NOT finished transmission yet (no EOS time found).");
+                NS_LOG_INFO("checkFinishedTransmission: Client " << clientNodeId << " (IP: " << client_ip << ") has NOT finished transmission yet (no EOS time found).");
             }
         } else {
             NS_LOG_WARN("checkFinishedTransmission: Could not find IP address for client Node ID " << clientNodeId << " in all_nodes_ips. Cannot check its transmission status.");
@@ -298,7 +298,7 @@ void NetworkUtils::roundCleanup() {
             NS_LOG_WARN("roundCleanup: UE Node at index " << i << " is null. Skipping app cleanup for this node.");
             continue;
         }
-        NS_LOG_DEBUG("roundCleanup: Node " << ueNode->GetId() << " (index " << i << "). Has " << ueNode->GetNApplications() << " applications.");
+        NS_LOG_INFO("roundCleanup: Node " << ueNode->GetId() << " (index " << i << "). Has " << ueNode->GetNApplications() << " applications.");
 
         for (int j = ueNode->GetNApplications() - 1; j >= 0; --j) {
             Ptr<Application> app = ueNode->GetApplication(j);
@@ -306,7 +306,7 @@ void NetworkUtils::roundCleanup() {
                 NS_LOG_WARN("roundCleanup: Node " << ueNode->GetId() << ", App index " << j << " is null. Skipping.");
                 continue;
             }
-            NS_LOG_DEBUG("roundCleanup: Node " << ueNode->GetId() << ", checking App " << j << " (Type: " << app->GetInstanceTypeId().GetName() << ")");
+            NS_LOG_INFO("roundCleanup: Node " << ueNode->GetId() << ", checking App " << j << " (Type: " << app->GetInstanceTypeId().GetName() << ")");
             if (DynamicCast<MyApp>(app)) {
                 NS_LOG_INFO("roundCleanup: Found MyApp on Node " << ueNode->GetId() << ". Setting StopTime to " << Simulator::Now().GetSeconds() << "s.");
                 app->SetStopTime(Simulator::Now());
@@ -328,7 +328,7 @@ void NetworkUtils::roundCleanup() {
                     NS_LOG_WARN("roundCleanup: Server Node " << serverNode->GetId() << ", App index " << j << " is null. Skipping.");
                     continue;
                 }
-                NS_LOG_DEBUG("roundCleanup: Server Node " << serverNode->GetId() << ", checking App " << j << " (Type: " << app->GetInstanceTypeId().GetName() << ")");
+                NS_LOG_INFO("roundCleanup: Server Node " << serverNode->GetId() << ", checking App " << j << " (Type: " << app->GetInstanceTypeId().GetName() << ")");
                 if (DynamicCast<PacketSink>(app)) {
                     NS_LOG_INFO("roundCleanup: Found PacketSink on server Node " << serverNode->GetId() << ". Setting StopTime to " << Simulator::Now().GetSeconds() << "s.");
                     app->SetStopTime(Simulator::Now());

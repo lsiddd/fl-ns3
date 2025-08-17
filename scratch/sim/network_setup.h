@@ -9,8 +9,24 @@
 #include "ns3/mobility-module.h"
 #include "ns3/netanim-module.h"
 #include "ns3/point-to-point-helper.h"
+#include <map>
 
 using namespace ns3;
+
+struct ClientInfo {
+    int serving_enb;
+    double x_pos;
+    double y_pos;
+    double velocity;
+};
+
+struct EnbInfo {
+    double x_pos;
+    double y_pos;
+};
+
+extern std::map<int, ClientInfo> client_info;
+extern std::map<int, EnbInfo> enb_info;
 
 extern NodeContainer ueNodes;
 extern NodeContainer enbNodes;

@@ -19,12 +19,12 @@ int main(int argc, char *argv[]) {
   LogComponentEnable("NetworkSetup", LOG_LEVEL_INFO);
   LogComponentEnable("MetricsCollector", LOG_LEVEL_INFO);
   LogComponentEnable("NetworkUtils", LOG_LEVEL_INFO);
-  LogComponentEnable("MyApp", LOG_LEVEL_DEBUG);
+  // LogComponentEnable("MyApp", LOG_LEVEL_DEBUG);
   LogComponentEnable("ClientTypes", LOG_LEVEL_INFO);
   LogComponentEnable("DataFrame", LOG_LEVEL_DEBUG);
   LogComponentEnable("Notifications", LOG_LEVEL_INFO);
-  LogComponentEnable("TcpSocket", LOG_LEVEL_DEBUG);
-  LogComponentEnable("TcpSocketBase", LOG_LEVEL_DEBUG);
+  // LogComponentEnable("TcpSocket", LOG_LEVEL_DEBUG);
+  // LogComponentEnable("TcpSocketBase", LOG_LEVEL_DEBUG);
 
   NS_LOG_INFO("Starting FL-NS3 Simulation");
 

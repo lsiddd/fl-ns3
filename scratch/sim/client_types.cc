@@ -12,7 +12,7 @@ ClientModels::ClientModels(Ptr<Node> n, int t, int b, bool s, double r, double s
       rsrp(r),
       sinr(sin),
       accuracy(acc) {
-    NS_LOG_DEBUG("ClientModels constructor (full): NodeId=" << (node ? node->GetId() : 0)
+    NS_LOG_INFO("ClientModels constructor (full): NodeId=" << (node ? node->GetId() : 0)
                                                           << ", TrainingTime=" << nodeTrainingTime
                                                           << ", ModelSize=" << nodeModelSize
                                                           << ", Selected=" << (selected ? "true" : "false")
@@ -28,7 +28,7 @@ ClientModels::ClientModels(Ptr<Node> n, int t, int b, double r, double sin, doub
       rsrp(r),
       sinr(sin),
       accuracy(acc) {
-    NS_LOG_DEBUG("ClientModels constructor (partial): NodeId=" << (node ? node->GetId() : 0)
+    NS_LOG_INFO("ClientModels constructor (partial): NodeId=" << (node ? node->GetId() : 0)
                                                              << ", TrainingTime=" << nodeTrainingTime
                                                              << ", ModelSize=" << nodeModelSize
                                                              << ", RSRP=" << rsrp << ", SINR=" << sinr
@@ -50,5 +50,5 @@ NodesIps::NodesIps(int n, int i, Ipv4Address ia)
     : nodeId(n),
       index(i),
       ip(ia) {
-    NS_LOG_DEBUG("NodesIps constructor: NodeId=" << nodeId << ", Index=" << index << ", IP=" << ip);
+    NS_LOG_INFO("NodesIps constructor: NodeId=" << nodeId << ", Index=" << index << ", IP=" << ip);
 }

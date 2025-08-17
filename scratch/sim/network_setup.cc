@@ -4,6 +4,9 @@
 
 NS_LOG_COMPONENT_DEFINE("NetworkSetup");
 
+std::map<int, ClientInfo> client_info;
+std::map<int, EnbInfo> enb_info;
+
 const double simStopTime = 400.0;
 const int numberOfUes = 10;
 const int numberOfEnbs = 5;
@@ -92,6 +95,14 @@ void NetworkSetup::setupNodes(int numberOfEnbs, int numberOfUes) {
   enbNodes.Create(numberOfEnbs);
   ueNodes.Create(numberOfUes);
   NS_LOG_INFO("Created " << numberOfEnbs << " eNBs and " << numberOfUes << " UEs.");
+
+  for (uint32_t i = 0; i < enbNodes.GetN(); ++i) {
+    enb_info[i] = EnbInfo();
+  }
+
+  for (uint32_t i = 0; i < ueNodes.GetN(); ++i) {
+    client_info[i] = ClientInfo();
+  }
 }
 
 void NetworkSetup::setupMobility(bool useStaticClients, int scenarioSize, Ptr<PointToPointEpcHelper> epcHelper) {
@@ -109,6 +120,14 @@ void NetworkSetup::setupMobility(bool useStaticClients, int scenarioSize, Ptr<Po
   enbmobility.SetPositionAllocator(enbPositionAlloc);
   enbmobility.Install(enbNodes);
   NS_LOG_INFO("eNBs installed with ConstantPositionMobilityModel and random positions within scenario size.");
+
+  for (uint32_t i = 0; i < enbNodes.GetN(); ++i) {
+    Ptr<MobilityModel> mob = enbNodes.Get(i)->GetObject<MobilityModel>();
+    Vector pos = mob->GetPosition();
+    enb_info[i].x_pos = pos.x;
+    enb_info[i].y_pos = pos.y;
+    NS_LOG_INFO("eNB " << i << " position: (" << pos.x << ", " << pos.y << ")");
+  }
 
   MobilityHelper uemobility;
   if (useStaticClients) {
@@ -139,6 +158,14 @@ void NetworkSetup::setupMobility(bool useStaticClients, int scenarioSize, Ptr<Po
     NS_LOG_INFO("Mobile UEs installed with RandomWalk2dMobilityModel within scenario size bounds.");
   }
 
+  for (uint32_t i = 0; i < ueNodes.GetN(); ++i) {
+    Ptr<MobilityModel> mob = ueNodes.Get(i)->GetObject<MobilityModel>();
+    Vector pos = mob->GetPosition();
+    client_info[i].x_pos = pos.x;
+    client_info[i].y_pos = pos.y;
+    NS_LOG_INFO("UE " << i << " position: (" << pos.x << ", " << pos.y << ")");
+  }
+
   Ptr<Node> pgw = epcHelper->GetPgwNode();
   Ptr<Node> remoteHost = remoteHostContainer.Get(0);
   enbmobility.Install(pgw);
@@ -154,6 +181,37 @@ void NetworkSetup::setupDevicesAndIp(Ptr<LteHelper> mmwaveHelper, Ptr<PointToPoi
   epcHelper->AssignUeIpv4Address(NetDeviceContainer(ueDevs));
   mmwaveHelper->AttachToClosestEnb(ueDevs, enbDevs);
   NS_LOG_INFO("eNB and UE devices installed. UE IP addresses assigned. UEs attached to closest eNB.");
+
+// scratch/sim/network_setup.cc
+
+for (uint32_t i = 0; i < ueNodes.GetN(); ++i) {
+    Ptr<NetDevice> ueDevice = ueDevs.Get(i);
+    Ptr<LteUeNetDevice> lteUeDevice = ueDevice->GetObject<LteUeNetDevice>();
+
+    // Add this check to ensure the UE is connected
+    if (!lteUeDevice || !lteUeDevice->GetRrc() || 
+        (lteUeDevice->GetRrc()->GetState() != LteUeRrc::CONNECTED_NORMALLY &&
+         lteUeDevice->GetRrc()->GetState() != LteUeRrc::CONNECTED_HANDOVER))
+    {
+        NS_LOG_WARN("UE " << i << " is not in a connected state. Skipping attachment info.");
+        Ptr<Ipv4> ipv4 = ueNodes.Get(i)->GetObject<Ipv4>();
+        if (ipv4 && ipv4->GetNInterfaces() > 1) {
+            Ipv4Address ueIp = ipv4->GetAddress(1, 0).GetLocal();
+            NS_LOG_INFO("UE " << i << " IP address: " << ueIp);
+        }
+        continue; // Skip the rest of the loop for this unconnected UE
+    }
+
+    uint16_t enbCellId = lteUeDevice->GetRrc()->GetCellId();
+    client_info[i].serving_enb = enbCellId;
+
+    Ptr<Ipv4> ipv4 = ueNodes.Get(i)->GetObject<Ipv4>();
+    Ipv4Address ueIp = ipv4->GetAddress(1, 0).GetLocal();
+    NS_LOG_INFO("UE " << i << " IP address: " << ueIp);
+
+    double dist = ueNodes.Get(i)->GetObject<MobilityModel>()->GetDistanceFrom(enbNodes.Get(enbCellId)->GetObject<MobilityModel>());
+    NS_LOG_INFO("UE " << i << " is attached to eNB " << enbCellId << " with distance " << dist << "m");
+}
 }
 
 void NetworkSetup::setupRouting(Ptr<PointToPointEpcHelper> epcHelper) {

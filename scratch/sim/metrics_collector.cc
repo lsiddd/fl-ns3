@@ -13,6 +13,7 @@ DataFrame accuracy_df;
 DataFrame participation_df;
 DataFrame throughput_df;
 DataFrame rsrp_sinr_df;
+DataFrame fl_metrics_df;
 std::map<uint16_t, std::map<uint16_t, double>> sinrUe;
 std::map<uint16_t, std::map<uint16_t, double>> rsrpUe;
 
@@ -35,6 +36,8 @@ void MetricsCollector::initializeDataFrames() {
   std::vector<std::string> rsrp_sinr_columns = {
       "time",    "round",    "ue_node_id", "enb_cell_id",
       "ue_rnti", "rsrp_dbm", "sinr_db",    "connected_state"};
+  std::vector<std::string> fl_metrics_columns = {
+      "time", "round", "client_id", "accuracy"};
 
   for (const auto &column : accuracy_columns) {
     accuracy_df.addColumn(column);
@@ -51,6 +54,10 @@ void MetricsCollector::initializeDataFrames() {
   for (const auto &column : rsrp_sinr_columns) {
     rsrp_sinr_df.addColumn(column);
     NS_LOG_DEBUG("Added rsrp_sinr_df column: " << column);
+  }
+  for (const auto &column : fl_metrics_columns) {
+    fl_metrics_df.addColumn(column);
+    NS_LOG_DEBUG("Added fl_metrics_df column: " << column);
   }
   NS_LOG_INFO("All DataFrames initialized with columns.");
 }
@@ -220,19 +227,39 @@ void MetricsCollector::networkInfo(Ptr<FlowMonitor> monitor) {
         NS_LOG_DEBUG("networkInfo: Time difference is zero or negative (" << timeDiff << "s), not calculating throughput for this interval.");
     }
 
+    for (uint32_t i = 0; i < ueNodes.GetN(); ++i) {
+        Ptr<MobilityModel> mob = ueNodes.Get(i)->GetObject<MobilityModel>();
+        Vector pos = mob->GetPosition();
+        Vector vel = mob->GetVelocity();
+        client_info[i].x_pos = pos.x;
+        client_info[i].y_pos = pos.y;
+        client_info[i].velocity = vel.x;
+
+        auto [rsrp, sinr] = getRsrpSinr(i);
+
+        NS_LOG_INFO("UE " << i << " | Pos: (" << pos.x << ", " << pos.y << ") | Vel: " << vel.x << " m/s | RSRP: " << rsrp << " | SINR: " << sinr);
+    }
+
     lastTotalRxBytes = currentTotalRxBytes;
     lastTotalTxBytes = currentTotalTxBytes;
     lastTime = currentTime;
     NS_LOG_DEBUG("networkInfo: Updated lastTotalRxBytes=" << lastTotalRxBytes << ", lastTotalTxBytes=" << lastTotalTxBytes << ", lastTime=" << lastTime.GetSeconds() << "s.");
 }
 
+void MetricsCollector::logFlMetrics(int clientId, double accuracy) {
+    fl_metrics_df.addRow({Simulator::Now().GetSeconds(), (double)roundNumber, (double)clientId, accuracy});
+}
+
 void MetricsCollector::exportDataFrames() {
     NS_LOG_INFO("Exporting DataFrames to 'results/' directory.");
-    system("mkdir -p results");
+    if (system("mkdir -p results") != 0) {
+        NS_LOG_WARN("Could not create results directory.");
+    }
     accuracy_df.toCsv("results/accuracy_fl_api.csv");
     participation_df.toCsv("results/clientParticipation_fl_api.csv");
     throughput_df.toCsv("results/throughput_fl_api.csv");
     rsrp_sinr_df.toCsv("results/rsrp_sinr_metrics.csv");
+    fl_metrics_df.toCsv("results/fl_metrics.csv");
     NS_LOG_INFO("All DataFrames exported.");
 }
 

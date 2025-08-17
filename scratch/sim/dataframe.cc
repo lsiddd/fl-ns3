@@ -6,7 +6,7 @@ NS_LOG_COMPONENT_DEFINE("DataFrame"); // Define log component
 // Add a column to the DataFrame
 void DataFrame::addColumn(const std::string& columnName) {
     columns.push_back(columnName);
-    NS_LOG_DEBUG("DataFrame: Added column '" << columnName << "'.");
+    NS_LOG_INFO("DataFrame: Added column '" << columnName << "'.");
 
     // Ensure all existing rows have a placeholder for the new column
     for (auto& row : data) {
@@ -21,7 +21,7 @@ void DataFrame::addColumn(const std::string& columnName) {
 void DataFrame::addRow(const std::vector<DataFrameElement>& rowData) {
     if (rowData.size() == columns.size()) {
         data.push_back(rowData);
-        // NS_LOG_DEBUG("DataFrame: Added a row with " << rowData.size() << " elements."); // Too verbose
+        NS_LOG_INFO("DataFrame: Added a row with " << rowData.size() << " elements.");
     } else {
         NS_LOG_ERROR("DataFrame: Error adding row. Row size (" << rowData.size() << ") does not match number of columns (" << columns.size() << "). Row not added.");
         // Optional: Handle this error more gracefully, e.g., pad the row or throw exception.
@@ -33,7 +33,7 @@ void DataFrame::addRow(const std::vector<DataFrameElement>& rowData) {
 void DataFrame::insertData(long unsigned int row, long unsigned int col, const DataFrameElement& value) {
     if (row < data.size() && col < data[row].size()) {
         data[row][col] = value;
-        // NS_LOG_DEBUG("DataFrame: Inserted data into cell [" << row << "][" << col << "]."); // Too verbose for large dataframes
+        NS_LOG_INFO("DataFrame: Inserted data into cell [" << row << "][" << col << "].");
     } else {
         NS_LOG_ERROR("DataFrame: Error inserting data. Index out of range: row=" << row << ", col=" << col << ". Max row=" << data.size() << ", Max col=" << (data.empty() ? 0 : data[0].size()));
         // Optional: Handle this error, e.g., resize or throw exception.

@@ -80,7 +80,7 @@ void MyApp::StartApplication()
 {
     m_running = true;
     m_packetsSent = 0;
-    NS_LOG_INFO("MyApp StartApplication: Starting at " << Simulator::Now().GetSeconds() << "s.");
+    NS_LOG_INFO("MyApp StartApplication: Starting at " << Simulator::Now().GetSeconds() << "s for peer " << m_peer);
 
     if (!m_socket)
     {
@@ -89,7 +89,7 @@ void MyApp::StartApplication()
 
     m_socket->Bind();
     m_socket->Connect(m_peer);
-    NS_LOG_DEBUG("MyApp StartApplication: Socket bound and connected to " << m_peer);
+    NS_LOG_INFO("MyApp StartApplication: Socket bound and connected to " << m_peer);
     // Schedule the first packet transmission
     if (m_nPackets > 0)
     {
@@ -106,7 +106,7 @@ void MyApp::StartApplication()
 void MyApp::StopApplication()
 {
     m_running = false;
-    NS_LOG_INFO("MyApp StopApplication: Stopping at " << Simulator::Now().GetSeconds() << "s. Packets sent: " << m_packetsSent);
+    NS_LOG_INFO("MyApp StopApplication: Stopping at " << Simulator::Now().GetSeconds() << "s for peer " << m_peer << ". Packets sent: " << m_packetsSent);
 
     if (m_sendEvent.IsPending())
     {
@@ -150,13 +150,13 @@ void MyApp::SendPacket()
         finHeader.SetIsFin(true);
         packet->AddHeader(finHeader);
 
-        NS_LOG_INFO("MyApp SendPacket: Sending final packet (FIN) with header");
+        NS_LOG_INFO("MyApp SendPacket: Sending final packet (" << m_packetsSent + 1 << "/" << m_nPackets << ") of size " << m_writeSize << " bytes (FIN) to " << m_peer);
     }
     else
     {
         packet = Create<Packet>(m_data.data(), m_writeSize);
         // packet = Create<Packet>(m_data, m_writeSize);
-        NS_LOG_DEBUG("MyApp SendPacket: Sending data packet");
+        NS_LOG_INFO("MyApp SendPacket: Sending packet " << m_packetsSent + 1 << "/" << m_nPackets << " of size " << m_writeSize << " bytes to " << m_peer);
     }
 
     // --- CORRECTED ERROR HANDLING ---
