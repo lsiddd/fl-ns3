@@ -172,6 +172,15 @@ int FLCoordinator::callPythonApi(const std::string &endpoint,
 bool FLCoordinator::initializeFlApi() {
     FL_API_BASE_URL = getEnvVar("FL_API_URL", "http://127.0.0.1:5005");
     
+    NS_LOG_INFO("Resetting Python FL API state...");
+    int reset_http_code = callPythonApi("/reset_simulation", "POST");
+    if (reset_http_code != 200) {
+        NS_LOG_WARN("Failed to reset Python FL API state. HTTP Code: " << reset_http_code << ". Continuing anyway...");
+    } else {
+        NS_LOG_INFO("Python FL API state reset successfully.");
+    }
+    sleep(1);
+    
     NS_LOG_INFO("Configuring Python FL API...");
     int api_port = 5005;
     json fl_config_payload;
